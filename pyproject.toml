@@ -1,0 +1,26 @@
+[project]
+name = "backhoe"
+version = "0.1.0"
+description = "OSINT recon that gives you an answer, not a data dump."
+requires-python = ">=3.10"
+dependencies = [
+    "click>=8.1",
+    "rich>=13.7",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+backhoe = "backhoe.cli:cli"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["backhoe*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
