@@ -1,0 +1,77 @@
+from unittest.mock import patch
+
+from click.testing import CliRunner
+
+from backhoe.backends.dns_checks import DnsCheckError
+from backhoe.backends.gravatar import GravatarError
+from backhoe.cli import cli
+
+
+def test_person_check_rejects_invalid_email():
+    runner = CliRunner()
+    result = runner.invoke(cli, ["person-check", "not-an-email"])
+    assert result.exit_code != 0
+
+
+def test_person_check_exits_nonzero_on_dns_failure():
+    runner = CliRunner()
+    with patch("backhoe.cli.dns_checks.check_mx", side_effect=DnsCheckError("boom")):
+        result = runner.invoke(cli, ["person-check", "user@example.com"])
+    assert result.exit_code != 0
+
+
+def test_person_check_happy_path_continues_without_gravatar():
+    runner = CliRunner()
+    with patch("backhoe.cli.dns_checks.check_mx", return_value=["mail.example.com"]), patch(
+        "backhoe.cli.dns_checks.check_spf", return_value="v=spf1 ~all"
+    ), patch("backhoe.cli.dns_checks.check_dmarc", return_value=(True, "reject")), patch(
+        "backhoe.cli.check_gravatar", side_effect=GravatarError("network down")
+    ):
+        result = runner.invoke(cli, ["person-check", "user@example.com"])
+    assert result.exit_code == 0
+    assert "Gravatar check skipped" in result.output
+    assert "example.com" in result.output
+
+
+def test_infra_check_accepts_a_bare_ip():
+    runner = CliRunner()
+    with patch("backhoe.cli.dns_checks.reverse_dns", return_value=None), patch(
+        "backhoe.cli.netcheck.tcp_tls_is_intercepted", return_value=True
+    ):
+        result = runner.invoke(cli, ["infra-check", "1.2.3.4"])
+    assert result.exit_code == 0
+    assert "1.2.3.4" in result.output
+
+
+def test_infra_check_skips_ports_and_tls_when_intercepted():
+    runner = CliRunner()
+    with patch("backhoe.cli.dns_checks.resolve_a_records", return_value=["1.2.3.4"]), patch(
+        "backhoe.cli.dns_checks.reverse_dns", return_value=None
+    ), patch("backhoe.cli.netcheck.tcp_tls_is_intercepted", return_value=True), patch(
+        "backhoe.cli.portscan.scan_ports"
+    ) as scan_mock, patch(
+        "backhoe.cli.tls.get_certificate_info"
+    ) as tls_mock:
+        result = runner.invoke(cli, ["infra-check", "example.com"])
+
+    assert result.exit_code == 0
+    assert "transparently intercepts" in result.output
+    scan_mock.assert_not_called()
+    tls_mock.assert_not_called()
+
+
+def test_infra_check_runs_ports_and_tls_when_not_intercepted():
+    runner = CliRunner()
+    with patch("backhoe.cli.dns_checks.resolve_a_records", return_value=["1.2.3.4"]), patch(
+        "backhoe.cli.dns_checks.reverse_dns", return_value="host.example.com"
+    ), patch("backhoe.cli.netcheck.tcp_tls_is_intercepted", return_value=False), patch(
+        "backhoe.cli.portscan.scan_ports", return_value={443: True, 22: False}
+    ), patch(
+        "backhoe.cli.tls.get_certificate_info",
+        return_value={"days_until_expiry": 60, "issuer": {}, "subject": {}, "san": []},
+    ):
+        result = runner.invoke(cli, ["infra-check", "example.com"])
+
+    assert result.exit_code == 0
+    assert "tls" in result.output
+    assert "portscan" in result.output

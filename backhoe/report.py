@@ -44,7 +44,51 @@ def _synthesize_summary(target: str, findings: list[Finding]) -> str:
 
     ports = by_type.get(FindingType.OPEN_PORT, [])
     if ports:
-        lines.append(f"{len(ports)} open port(s) found — confirm each is expected.")
+        sensitive = [f for f in ports if f.interest >= 0.75]
+        lines.append(
+            f"{len(ports)} open port(s) found"
+            + (f", {len(sensitive)} on sensitive services worth confirming." if sensitive else ".")
+        )
+
+    dns_records = by_type.get(FindingType.DNS_RECORD, [])
+    mail_gaps = [
+        f
+        for f in dns_records
+        if f.raw.get("record_type") in ("spf", "dmarc") and not f.raw.get("present")
+    ]
+    weak_dmarc = [
+        f
+        for f in dns_records
+        if f.raw.get("record_type") == "dmarc" and f.raw.get("present") and f.raw.get("policy") == "none"
+    ]
+    if mail_gaps:
+        gap_names = ", ".join(f.raw["record_type"].upper() for f in mail_gaps)
+        lines.append(f"Missing {gap_names} — this domain's mail can be spoofed.")
+    elif weak_dmarc:
+        lines.append(
+            "SPF is present, but DMARC policy is p=none — spoofed mail from this "
+            "domain is monitored, not blocked."
+        )
+    elif dns_records:
+        lines.append("SPF and DMARC are both present and enforcing (not p=none).")
+
+    certs = by_type.get(FindingType.CERTIFICATE, [])
+    for f in certs:
+        days_left = f.raw.get("days_until_expiry")
+        if days_left is not None and days_left < 30:
+            lines.append(f"TLS certificate for {f.value} expires in {days_left} day(s).")
+
+    ips = by_type.get(FindingType.IP_ADDRESS, [])
+    if ips:
+        no_ptr = sum(1 for f in ips if not f.raw.get("ptr"))
+        lines.append(
+            f"{len(ips)} IP(s) resolved" + (f", {no_ptr} with no reverse DNS record." if no_ptr else ".")
+        )
+
+    emails = by_type.get(FindingType.EMAIL, [])
+    for f in emails:
+        if f.raw.get("gravatar"):
+            lines.append(f"{f.value} has a public Gravatar profile.")
 
     if not lines:
         lines.append("No findings from the backends run. Try enabling more API keys or a wider scan.")
