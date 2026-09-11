@@ -113,6 +113,42 @@ def test_infra_check_skips_ports_and_tls_when_intercepted():
     tls_mock.assert_not_called()
 
 
+def test_infra_check_scans_every_resolved_ip_not_the_original_hostname():
+    # A hostname behind a CDN/load balancer resolves to multiple IPs.
+    # portscan.scan_ports() must be called with each concrete IP — not the
+    # original hostname, which would let socket.create_connection() do its
+    # own independent, untracked resolution on every single connection.
+    runner = CliRunner()
+    with patch("backhoe.cli.dns_checks.resolve_a_records", return_value=["1.2.3.4", "5.6.7.8"]), patch(
+        "backhoe.cli.dns_checks.reverse_dns", return_value=None
+    ), patch("backhoe.cli.netcheck.tcp_tls_is_intercepted", return_value=False), patch(
+        "backhoe.cli.portscan.scan_ports", return_value={}
+    ) as scan_mock, patch(
+        "backhoe.cli.tls.get_certificate_info", return_value={"days_until_expiry": 60, "issuer": {}, "subject": {}, "san": []}
+    ):
+        result = runner.invoke(cli, ["infra-check", "cdn.example.com"])
+
+    assert result.exit_code == 0
+    scan_mock.assert_any_call("1.2.3.4")
+    scan_mock.assert_any_call("5.6.7.8")
+    assert scan_mock.call_count == 2
+
+
+def test_infra_check_tags_open_port_findings_with_the_ip_not_the_hostname():
+    runner = CliRunner()
+    with patch("backhoe.cli.dns_checks.resolve_a_records", return_value=["1.2.3.4"]), patch(
+        "backhoe.cli.dns_checks.reverse_dns", return_value=None
+    ), patch("backhoe.cli.netcheck.tcp_tls_is_intercepted", return_value=False), patch(
+        "backhoe.cli.portscan.scan_ports", return_value={443: True}
+    ), patch(
+        "backhoe.cli.tls.get_certificate_info", return_value={"days_until_expiry": 60, "issuer": {}, "subject": {}, "san": []}
+    ):
+        result = runner.invoke(cli, ["infra-check", "cdn.example.com"])
+
+    assert result.exit_code == 0
+    assert "1.2.3.4:443" in result.output
+
+
 def test_infra_check_runs_ports_and_tls_when_not_intercepted():
     runner = CliRunner()
     with patch("backhoe.cli.dns_checks.resolve_a_records", return_value=["1.2.3.4"]), patch(

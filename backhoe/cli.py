@@ -197,18 +197,27 @@ def infra_check(target: str, ports: bool):
         )
     else:
         if ports:
-            click.echo(f"Scanning {len(portscan.COMMON_PORTS)} common ports on {target}...\n")
-            port_results = portscan.scan_ports(target)
-            for port, is_open in port_results.items():
-                if is_open:
-                    findings.append(
-                        Finding(
-                            type=FindingType.OPEN_PORT,
-                            value=f"{target}:{port}",
-                            source="portscan",
-                            raw={"port": port, "service": portscan.COMMON_PORTS.get(port, "?")},
+            click.echo(
+                f"Scanning {len(portscan.COMMON_PORTS)} common ports on "
+                f"{len(ips)} resolved IP(s)...\n"
+            )
+            # Scan every IP `target` actually resolved to, not `target`
+            # itself — a hostname behind a CDN/load balancer resolves to
+            # multiple IPs, and re-resolving inside portscan.scan_ports()
+            # means whichever IP the OS resolver hands back that call gets
+            # scanned, silently, with no record of which one it was.
+            for ip in ips:
+                port_results = portscan.scan_ports(ip)
+                for port, is_open in port_results.items():
+                    if is_open:
+                        findings.append(
+                            Finding(
+                                type=FindingType.OPEN_PORT,
+                                value=f"{ip}:{port}",
+                                source="portscan",
+                                raw={"port": port, "service": portscan.COMMON_PORTS.get(port, "?")},
+                            )
                         )
-                    )
 
         try:
             cert = tls.get_certificate_info(target)

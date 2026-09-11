@@ -58,3 +58,14 @@ def test_merged_subdomain_keeps_high_confidence_when_crtsh_is_among_sources():
     merged = Finding(type=FindingType.SUBDOMAIN, value="a.example.com", source="crt.sh, theharvester")
     score_finding(merged)
     assert merged.confidence == 0.9
+
+
+def test_rescoring_the_same_finding_twice_does_not_duplicate_the_note():
+    # No keyword match here on purpose — the keyword branch unconditionally
+    # overwrites `note`, which would accidentally mask the duplication this
+    # test exists to catch. Only the recency branch (which appends onto
+    # whatever `note` already holds) actually duplicates on a second pass.
+    f = _sub("www.example.com", first_seen=datetime.now(timezone.utc) - timedelta(days=2))
+    score_finding(f)
+    score_finding(f)
+    assert f.note.count("recently stood up") == 1

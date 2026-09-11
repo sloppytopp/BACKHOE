@@ -97,8 +97,44 @@ don't need it.
 - `infra-check <target>` — resolve + reverse DNS, bounded 9-port scan,
   TLS cert expiry, with the interception guard above
 
-70 tests, all passing, `pytest` from repo root (`pip install -e ".[dev]"`
+77 tests, all passing, `pytest` from repo root (`pip install -e ".[dev]"`
 first).
+
+## Three gap fixes (2026-09-11), applied via TDD after independent verification
+
+These arrived as loose files (a full `schema.py` replacement + two diffs)
+in `/home/rhino/Documents/backhoe files first patches/`, described in
+oddly self-referential language ("I need to flag something about my own
+patch"). Origin unclear — not something this session wrote. Each claim
+was independently verified against the live code (not trusted from the
+description) before anything was applied, and each fix has its own
+TDD-driven failing-then-passing test:
+
+- **`schema.py`**: `Finding.key()` didn't disambiguate `DNS_RECORD`
+  findings by `raw["record_type"]` — verified real: `person-check`'s
+  three DNS findings (mx/spf/dmarc) share `type:value` and would
+  silently collapse to one the moment `merge_findings()` ever ran over
+  them (it doesn't today, but nothing guaranteed that stays true).
+  `merge_findings()` also now preserves `raw` instead of dropping the
+  losing duplicate's payload — reshaping it to `{source: {...}}` *only*
+  on an actual collision (verified this never touches any current
+  `scoring.py` reader: subdomain scoring never reads `raw`, and no
+  domain-audit email finding has ever carried a `"gravatar"` key to
+  begin with) — and fills in a blank `note` from a later duplicate too.
+- **`scoring.py`**: `score_finding()` now resets `note = ""` before
+  scoring. Today this is a pure no-op (nothing re-scores a `Finding`
+  yet), but `_score_subdomain` appends onto `note` in two places, and
+  without the reset a second scoring pass on the same object would
+  silently duplicate them.
+- **`cli.py` `infra-check`**: real, verified bug — `portscan.scan_ports(target)`
+  was called with the original hostname, not any of the already-resolved
+  `ips`, so each of the 9 port-scan connection attempts did its own
+  independent DNS resolution via `socket.create_connection`. A
+  multi-IP target (anything behind a CDN/load balancer) got scanned
+  against whichever IP the OS resolver handed back per-call — untied to
+  any of the IPs `infra-check` had already resolved and reported. Now
+  scans every IP in `ips` explicitly, and `OPEN_PORT` findings are
+  tagged by IP, not hostname.
 
 ## theHarvester (v0.4) — subprocess, not a dependency
 

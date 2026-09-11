@@ -33,10 +33,26 @@ class Finding:
     note: str = ""             # short human-readable context, e.g. "cert issued 3 days ago"
     live: bool | None = None   # DNS resolution result this run — None if not checked
     raw: dict = field(default_factory=dict)  # original backend payload, kept for debugging
+    merged_raw: bool = field(default=False, repr=False)  # internal: has raw been reshaped to {source: {...}}?
 
     def key(self) -> str:
-        """Dedup key — same type+value from two sources should merge, not duplicate."""
+        """Dedup key — same type+value from two sources should merge, not
+        duplicate. DNS_RECORD findings additionally key on raw['record_type']
+        because multiple distinct records (mx/spf/dmarc) legitimately share
+        the same type+value (the domain) — without this, person-check's
+        three DNS findings would collapse into one the moment merge_findings
+        ever runs over them.
+        """
+        if self.type == FindingType.DNS_RECORD:
+            record_type = self.raw.get("record_type", "")
+            return f"{self.type}:{self.value.lower()}:{record_type}"
         return f"{self.type}:{self.value.lower()}"
+
+
+# Fields filled in from a later duplicate ONLY when the winning finding
+# left them blank. Adding a new field to Finding? Add it here too, or it
+# silently never merges.
+_FILL_IF_BLANK = ("first_seen", "live", "note")
 
 
 def merge_findings(findings: list[Finding]) -> list[Finding]:
@@ -44,7 +60,14 @@ def merge_findings(findings: list[Finding]) -> list[Finding]:
     same subdomain surfaced by both crt.sh and theHarvester) into one, so
     the report shows one row with combined provenance instead of literal
     duplicates. First finding seen for a key wins for most fields; later
-    ones only fill in what the first left blank.
+    ones fill in blanks.
+
+    `raw` is preserved, not dropped: a finding with no duplicate keeps its
+    original flat `raw` dict untouched, so scoring.py's flat
+    `raw.get("port")`-style lookups need no changes. Only the moment a
+    second source actually merges into an existing key does `raw` become
+    `{source_name: {...}, other_source_name: {...}}`, so a second source's
+    payload survives instead of silently being dropped.
     """
     merged: dict[str, Finding] = {}
     for f in findings:
@@ -52,12 +75,24 @@ def merge_findings(findings: list[Finding]) -> list[Finding]:
         if k not in merged:
             merged[k] = f
             continue
+
         existing = merged[k]
         sources = existing.source.split(", ")
         if f.source not in sources:
             existing.source = ", ".join([*sources, f.source])
-        if existing.first_seen is None and f.first_seen is not None:
-            existing.first_seen = f.first_seen
-        if existing.live is None and f.live is not None:
-            existing.live = f.live
+
+        for attr in _FILL_IF_BLANK:
+            if not getattr(existing, attr) and getattr(f, attr):
+                setattr(existing, attr, getattr(f, attr))
+
+        if not existing.merged_raw:
+            # First real collision for this key — reshape once, namespaced
+            # by source, so both payloads survive future merges too.
+            original_source = existing.source.split(", ")[0]
+            existing.raw = {original_source: existing.raw} if existing.raw else {}
+            existing.merged_raw = True
+
+        if f.raw:
+            existing.raw[f.source] = f.raw
+
     return list(merged.values())

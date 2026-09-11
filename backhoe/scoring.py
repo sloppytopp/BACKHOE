@@ -31,6 +31,13 @@ RECENT_CERT_WINDOW = timedelta(days=30)
 def score_finding(finding: Finding) -> Finding:
     """Mutates and returns the finding with confidence + interest set."""
 
+    # Scoring is meant to be a pure function of the finding's other fields
+    # (source, raw, live, first_seen) — reset note before any branch runs so
+    # re-scoring the same Finding twice doesn't duplicate appended fragments.
+    # _score_subdomain appends onto `note` in two places below; without this
+    # reset, a second scoring pass on the same object doubles them silently.
+    finding.note = ""
+
     if finding.type == FindingType.SUBDOMAIN:
         _score_subdomain(finding)
     elif finding.type == FindingType.BREACH_HIT:
