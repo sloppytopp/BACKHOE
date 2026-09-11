@@ -4,6 +4,7 @@ from click.testing import CliRunner
 
 from backhoe.backends.dns_checks import DnsCheckError
 from backhoe.backends.gravatar import GravatarError
+from backhoe.backends.spiderfoot import SpiderFootError, SpiderFootNotInstalled
 from backhoe.backends.theharvester import TheHarvesterError, TheHarvesterNotInstalled
 from backhoe.cli import cli
 from backhoe.schema import Finding, FindingType
@@ -84,6 +85,55 @@ def test_domain_audit_merges_duplicate_subdomains_from_both_sources():
     # narrow console widths, so don't assert on the literal joined string
     assert "crt.sh" in result.output
     assert "theharvester" in result.output
+
+
+def test_domain_audit_warns_and_continues_when_spiderfoot_not_installed():
+    runner = CliRunner()
+    with patch("backhoe.cli.crtsh.run", return_value=[]), patch(
+        "backhoe.cli.theharvester.run", return_value=[]
+    ), patch("backhoe.cli.spiderfoot.run", side_effect=SpiderFootNotInstalled("not found")):
+        result = runner.invoke(cli, ["domain-audit", "example.com", "--no-resolve"])
+
+    assert result.exit_code == 0
+    assert "SpiderFoot" in result.output
+
+
+def test_domain_audit_warns_and_continues_on_spiderfoot_error():
+    runner = CliRunner()
+    with patch("backhoe.cli.crtsh.run", return_value=[]), patch(
+        "backhoe.cli.theharvester.run", return_value=[]
+    ), patch("backhoe.cli.spiderfoot.run", side_effect=SpiderFootError("exited 1: boom")):
+        result = runner.invoke(cli, ["domain-audit", "example.com", "--no-resolve"])
+
+    assert result.exit_code == 0
+    assert "boom" in result.output
+
+
+def test_domain_audit_skips_spiderfoot_with_no_spiderfoot_flag():
+    runner = CliRunner()
+    with patch("backhoe.cli.crtsh.run", return_value=[]), patch(
+        "backhoe.cli.theharvester.run", return_value=[]
+    ), patch("backhoe.cli.spiderfoot.run") as spiderfoot_mock:
+        result = runner.invoke(cli, ["domain-audit", "example.com", "--no-resolve", "--no-spiderfoot"])
+
+    assert result.exit_code == 0
+    spiderfoot_mock.assert_not_called()
+
+
+def test_domain_audit_merges_subdomain_found_by_all_three_sources():
+    runner = CliRunner()
+    crtsh_finding = Finding(type=FindingType.SUBDOMAIN, value="www.example.com", source="crt.sh")
+    harvester_finding = Finding(type=FindingType.SUBDOMAIN, value="www.example.com", source="theharvester")
+    spiderfoot_finding = Finding(type=FindingType.SUBDOMAIN, value="www.example.com", source="spiderfoot")
+
+    with patch("backhoe.cli.crtsh.run", return_value=[crtsh_finding]), patch(
+        "backhoe.cli.theharvester.run", return_value=[harvester_finding]
+    ), patch("backhoe.cli.spiderfoot.run", return_value=[spiderfoot_finding]):
+        result = runner.invoke(cli, ["domain-audit", "example.com", "--no-resolve"])
+
+    assert result.exit_code == 0
+    assert result.output.count("www.example.com") == 1
+    assert "spiderfoot" in result.output
 
 
 def test_infra_check_accepts_a_bare_ip():

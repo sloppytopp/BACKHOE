@@ -48,6 +48,8 @@ backhoe/
     netcheck.py            interception canary — see below, read this one
     theharvester.py        shells out to a separately-installed theHarvester
                         CLI (not a pip dependency — see "theHarvester" below)
+    spiderfoot.py           shells out to a separately-installed SpiderFoot
+                        checkout (not a pip dependency — see "SpiderFoot" below)
 tests/                   pytest, everything network-mocked except the two
                         real-DNS tests in test_resolve.py
 ```
@@ -87,8 +89,8 @@ don't need it.
 ## What's shipped (v0.4)
 
 - `domain-audit <domain>` — crt.sh subdomain enum, optional theHarvester
-  enrichment (see below), keyword + cert-recency interest scoring, live
-  DNS liveness check (`--no-resolve` to skip)
+  and SpiderFoot enrichment (see below), keyword + cert-recency interest
+  scoring, live DNS liveness check (`--no-resolve` to skip)
 - `person-check <email>` — MX/SPF/DMARC for the domain, Gravatar check
   for the address. Verified live against yellowhammertrader.com during
   development: found DMARC is present but `p=none` (monitor-only, not
@@ -97,7 +99,7 @@ don't need it.
 - `infra-check <target>` — resolve + reverse DNS, bounded 9-port scan,
   TLS cert expiry, with the interception guard above
 
-77 tests, all passing, `pytest` from repo root (`pip install -e ".[dev]"`
+89 tests, all passing, `pytest` from repo root (`pip install -e ".[dev]"`
 first).
 
 ## Three gap fixes (2026-09-11), applied via TDD after independent verification
@@ -187,13 +189,58 @@ during development, not assumed from memory) before writing the parser:
   smoke test the first time this runs somewhere with theHarvester
   actually installed.
 
+## SpiderFoot (v0.4) — subprocess, not a dependency, actually run live
+
+`backends/spiderfoot.py` shells out to a separately-installed SpiderFoot
+checkout (github.com/smicallef/spiderfoot) for `domain-audit`. Unlike
+theHarvester, this one wasn't Python-version-blocked — its
+`requirements.txt` has no upper bound — so it was cloned, its
+dependencies actually installed, and a real scan run live against
+`example.com` end to end during development. Stronger verification than
+theHarvester got, and it changed the design in a way source-reading alone
+hadn't caught:
+
+- **SpiderFoot ships no console-script entry point at all** — no
+  `pip install`-able command, unlike theHarvester. It's meant to be
+  cloned and run as `python3 sf.py ...`. So instead of `shutil.which`,
+  `_find_sf_py()` looks for a `SPIDERFOOT_HOME` env var pointing at the
+  checkout, falling back to `shutil.which("sf.py")` only if an operator
+  has manually put it on PATH.
+- `sf.py -s <target> -t <types> -o json -q` genuinely is a one-shot scan
+  (confirmed live) — a built-in `sfp__stor_stdout` module streams a JSON
+  array straight to stdout, no server to run first.
+- **The live run is what caught the real gotcha**: the JSON stream is
+  *not* filtered down to the requested `-t` types — SpiderFoot pulls in
+  every module in the dependency chain, so a real scan against
+  `example.com` emitted dozens of event types (HTTP headers, raw DNS
+  records, PGP keys, Stack Overflow usernames...) far beyond
+  `INTERNET_NAME`/`EMAILADDR`. Every event is filtered here by its exact
+  `type` string, not the requested types.
+- **The gotcha inside the gotcha**: `"Internet Name"` (a real subdomain)
+  is a *different* type string than `"Affiliate - Internet Name"` — in
+  the live run, Cloudflare's own nameservers (the target's DNS provider,
+  not the target) came back labeled `"Affiliate - Internet Name"` while
+  `www.example.com` came back as plain `"Internet Name"`. A substring
+  match instead of an exact match would have misattributed a third
+  party's infrastructure to the target. Same exact-match discipline
+  applies to `"Email Address"`.
+- `DEFAULT_TYPES = "INTERNET_NAME,EMAILADDR"` passed to `-t` lets
+  SpiderFoot auto-select whichever of its own modules can produce those
+  types — no manual per-source curation needed like theHarvester's
+  `DEFAULT_SOURCES` list.
+- SpiderFoot writes persistent scan history to
+  `~/.spiderfoot/spiderfoot.db` by default (confirmed in source) —
+  overridden via the `SPIDERFOOT_DATA` env var, pointed at a per-call
+  tempdir, so nothing accumulates on the host.
+- Not found → `SpiderFootNotInstalled` (a `SpiderFootError`), caught
+  non-fatally in `cli.py` — same tier as theHarvester and Gravatar.
+  `--no-spiderfoot` skips it outright.
+- Only `"Internet Name"`→SUBDOMAIN and `"Email Address"`→EMAIL are
+  mapped, for the same reason theHarvester's `ips` is skipped: IP
+  addresses belong to infra-check's PTR-lookup-backed handling, not here.
+
 ## What's NOT built yet (don't claim otherwise)
 
-- SpiderFoot backend — much heavier than theHarvester: normally a
-  persistent service with its own SQLite DB and REST API (a lighter
-  `sf.py -s <target> -o json` CLI mode exists too). Deliberately not
-  bundled with theHarvester — different enough integration shape to
-  need its own design pass.
 - Shodan/Censys backend (richer port/service data than the built-in scan)
 - HaveIBeenPwned breach-hit backend (needs an API key — HIBP's
   by-email lookup hasn't been free/keyless since 2019)

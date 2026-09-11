@@ -35,9 +35,10 @@ One command, one target, one readable report — no module picker, no
 target-type dropdown.
 
 - `domain-audit` — subdomains from certificate transparency logs and
-  (if installed) theHarvester, live DNS check, interest-scored by name
-  and freshness. Pass `--no-resolve` to skip the live DNS check, or
-  `--no-harvester` to skip theHarvester.
+  (if installed) theHarvester and SpiderFoot, live DNS check,
+  interest-scored by name and freshness. Pass `--no-resolve` to skip
+  the live DNS check, `--no-harvester` to skip theHarvester, or
+  `--no-spiderfoot` to skip SpiderFoot.
 - `person-check` — mail security posture for the email's domain
   (MX/SPF/DMARC) plus a Gravatar existence check for the address.
 - `infra-check` — resolves the target, reverse-DNS on each IP, a
@@ -60,11 +61,12 @@ resolution tests are the one exception — they hit real DNS, resolving
 **domain-audit**
 - Pulls every subdomain seen in certificate transparency logs (crt.sh,
   no API key needed)
-- If [theHarvester](https://github.com/laramies/theHarvester) is
-  installed separately (it's not a BACKHOE dependency — see below),
-  also runs it against a curated set of keyless passive sources for
-  additional subdomains and emails. Findings for the same subdomain
-  from both sources merge into one row instead of duplicating.
+- If [theHarvester](https://github.com/laramies/theHarvester) and/or
+  [SpiderFoot](https://github.com/smicallef/spiderfoot) are installed
+  separately (neither is a BACKHOE dependency — see below), also runs
+  them for additional subdomains and emails. Findings for the same
+  subdomain from multiple sources merge into one row instead of
+  duplicating.
 - Flags subdomains with names like `admin`, `dev`, `staging`, `vpn`,
   etc. as higher-interest, and ones from certs issued in the last 30
   days (recently stood-up infra you may not know about)
@@ -110,21 +112,27 @@ resolution tests are the one exception — they hit real DNS, resolving
 - Renders a plain-English summary line plus a sorted, color-coded
   table — highest interest first
 
-## Optional external tool: theHarvester
+## Optional external tools: theHarvester and SpiderFoot
 
-`domain-audit` shells out to `theHarvester` if it's on `PATH`; it's
-never installed as a BACKHOE dependency (current theHarvester requires
-Python 3.14+, a different runtime than BACKHOE targets). Install it
-separately — e.g. `uv tool install theHarvester` or `pipx install
-theHarvester` — per [its own docs](https://github.com/laramies/theHarvester).
-If it isn't installed, `domain-audit` prints a yellow warning and
-continues without it; pass `--no-harvester` to skip it outright.
+`domain-audit` shells out to both if it can find them; neither is ever
+installed as a BACKHOE dependency.
+
+- **theHarvester** needs to be on `PATH` (current theHarvester requires
+  Python 3.14+, a different runtime than BACKHOE targets). Install it
+  separately — e.g. `uv tool install theHarvester` or `pipx install
+  theHarvester` — per [its own docs](https://github.com/laramies/theHarvester).
+  Skip it with `--no-harvester`.
+- **SpiderFoot** has no installable command at all — it's a checkout you
+  run as `python3 sf.py ...`. Clone
+  [its repo](https://github.com/smicallef/spiderfoot) anywhere and set
+  `SPIDERFOOT_HOME` to that directory. Skip it with `--no-spiderfoot`.
+
+If either isn't found, `domain-audit` prints a yellow warning and
+continues without it — same non-fatal tier as the Gravatar check in
+`person-check`.
 
 ## What's coming next
 
-- SpiderFoot as an additional backend — its heavier service-mode
-  architecture (a persistent app with its own DB/API, vs.
-  theHarvester's one-shot CLI) needs its own design pass
 - Shodan/Censys backend for richer port/service data
 - HaveIBeenPwned backend for breach hits (needs an API key)
 - WHOIS-based domain age lookup

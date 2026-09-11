@@ -13,10 +13,11 @@ import sys
 
 import click
 
-from .backends import crtsh, dns_checks, netcheck, portscan, theharvester, tls
+from .backends import crtsh, dns_checks, netcheck, portscan, spiderfoot, theharvester, tls
 from .backends.crtsh import CrtShError
 from .backends.dns_checks import DnsCheckError
 from .backends.gravatar import GravatarError, check_gravatar
+from .backends.spiderfoot import SpiderFootError, SpiderFootNotInstalled
 from .backends.theharvester import TheHarvesterError, TheHarvesterNotInstalled
 from .backends.tls import TlsError
 from .resolve import resolve_many
@@ -50,7 +51,18 @@ def cli():
         "if it isn't on PATH."
     ),
 )
-def domain_audit(domain: str, resolve: bool, harvester: bool):
+@click.option(
+    "--spiderfoot/--no-spiderfoot",
+    "spiderfoot_",  # avoid shadowing the imported `spiderfoot` module below
+    default=True,
+    help=(
+        "Run SpiderFoot for additional subdomain/email enumeration "
+        "(default: on). Requires a SpiderFoot checkout installed "
+        "separately — see github.com/smicallef/spiderfoot and set "
+        "SPIDERFOOT_HOME to it; skipped with a warning if not found."
+    ),
+)
+def domain_audit(domain: str, resolve: bool, harvester: bool, spiderfoot_: bool):
     """
     Run a domain recon profile: subdomains, certs, and (as more
     backends are wired in) breach data, open ports, and DNS history.
@@ -70,6 +82,14 @@ def domain_audit(domain: str, resolve: bool, harvester: bool):
             click.secho(f"theHarvester skipped: {exc}", fg="yellow", err=True)
         except TheHarvesterError as exc:
             click.secho(f"theHarvester lookup failed, skipping: {exc}", fg="yellow", err=True)
+
+    if spiderfoot_:
+        try:
+            findings = findings + spiderfoot.run(domain)
+        except SpiderFootNotInstalled as exc:
+            click.secho(f"SpiderFoot skipped: {exc}", fg="yellow", err=True)
+        except SpiderFootError as exc:
+            click.secho(f"SpiderFoot lookup failed, skipping: {exc}", fg="yellow", err=True)
 
     findings = merge_findings(findings)
 
