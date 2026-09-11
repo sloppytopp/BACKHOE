@@ -79,3 +79,11 @@ def test_email_with_gravatar_scores_higher_than_without():
     score_finding(with_g)
     score_finding(without_g)
     assert with_g.interest > without_g.interest
+
+
+def test_email_never_claims_a_gravatar_check_that_never_happened():
+    # theHarvester surfaces emails with no Gravatar check performed at all —
+    # raw simply has no "gravatar" key. Must not read as "no profile found".
+    f = Finding(type=FindingType.EMAIL, value="a@example.com", source="theharvester", raw={})
+    score_finding(f)
+    assert "gravatar" not in f.note.lower()

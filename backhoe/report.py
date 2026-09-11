@@ -108,7 +108,9 @@ def render_report(target: str, findings: list[Finding]) -> None:
     table.add_column("Type", width=12)
     table.add_column("Value")
     table.add_column("Live", width=6, justify="center")
-    table.add_column("Source", width=10)
+    # No fixed width: a merged finding's source (e.g. "crt.sh, theharvester")
+    # can exceed a single narrow column and must not be silently truncated.
+    table.add_column("Source")
     table.add_column("Note")
 
     for f in findings_sorted:

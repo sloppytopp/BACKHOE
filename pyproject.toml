@@ -1,6 +1,6 @@
 [project]
 name = "backhoe"
-version = "0.3.0"
+version = "0.4.0"
 description = "OSINT recon that gives you an answer, not a data dump."
 readme = "README.md"
 license = { text = "MIT" }

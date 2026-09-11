@@ -13,13 +13,14 @@ import sys
 
 import click
 
-from .backends import crtsh, dns_checks, netcheck, portscan, tls
+from .backends import crtsh, dns_checks, netcheck, portscan, theharvester, tls
 from .backends.crtsh import CrtShError
 from .backends.dns_checks import DnsCheckError
 from .backends.gravatar import GravatarError, check_gravatar
+from .backends.theharvester import TheHarvesterError, TheHarvesterNotInstalled
 from .backends.tls import TlsError
 from .resolve import resolve_many
-from .schema import Finding, FindingType
+from .schema import Finding, FindingType, merge_findings
 from .scoring import score_all
 from .report import render_report
 
@@ -39,7 +40,17 @@ def cli():
     default=True,
     help="Check live DNS resolution for each subdomain found (default: on).",
 )
-def domain_audit(domain: str, resolve: bool):
+@click.option(
+    "--harvester/--no-harvester",
+    default=True,
+    help=(
+        "Run theHarvester for additional subdomain/email enumeration "
+        "(default: on). Requires theHarvester installed separately — "
+        "see github.com/laramies/theHarvester; skipped with a warning "
+        "if it isn't on PATH."
+    ),
+)
+def domain_audit(domain: str, resolve: bool, harvester: bool):
     """
     Run a domain recon profile: subdomains, certs, and (as more
     backends are wired in) breach data, open ports, and DNS history.
@@ -51,6 +62,16 @@ def domain_audit(domain: str, resolve: bool):
     except CrtShError as exc:
         click.secho(f"crt.sh lookup failed: {exc}", fg="red", err=True)
         sys.exit(1)
+
+    if harvester:
+        try:
+            findings = findings + theharvester.run(domain)
+        except TheHarvesterNotInstalled as exc:
+            click.secho(f"theHarvester skipped: {exc}", fg="yellow", err=True)
+        except TheHarvesterError as exc:
+            click.secho(f"theHarvester lookup failed, skipping: {exc}", fg="yellow", err=True)
+
+    findings = merge_findings(findings)
 
     if resolve and findings:
         subdomains = [f.value for f in findings if f.type == FindingType.SUBDOMAIN]

@@ -139,6 +139,15 @@ def _score_ip_address(finding: Finding) -> None:
 
 
 def _score_email(finding: Finding) -> None:
+    if "gravatar" not in finding.raw:
+        # No Gravatar check was actually performed for this address (e.g. an
+        # email surfaced by theHarvester during domain-audit) — never render
+        # that as if we checked and found nothing.
+        finding.confidence = 0.5
+        finding.interest = 0.2
+        finding.note = finding.note or "found via passive OSINT — not independently verified"
+        return
+
     finding.confidence = 0.7
     if finding.raw.get("gravatar"):
         finding.interest = 0.35
@@ -149,7 +158,13 @@ def _score_email(finding: Finding) -> None:
 
 
 def _score_subdomain(finding: Finding) -> None:
-    finding.confidence = 0.9  # crt.sh data is directly observed, high trust
+    # crt.sh data is directly observed (an issued certificate) — high
+    # trust. theHarvester's own sources here are passive scraping (search
+    # engines, wayback archives, etc.) and meaningfully less certain on
+    # their own; a merged finding keeps the higher confidence as long as
+    # crt.sh is one of its sources.
+    sources = finding.source.split(", ")
+    finding.confidence = 0.9 if "crt.sh" in sources else 0.6
 
     name = finding.value.lower()
     interest = 0.2  # baseline — "just another subdomain"

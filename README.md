@@ -34,9 +34,10 @@ backhoe infra-check <target-domain-or-ip>
 One command, one target, one readable report — no module picker, no
 target-type dropdown.
 
-- `domain-audit` — subdomains from certificate transparency logs, live
-  DNS check, interest-scored by name and freshness.
-  Pass `--no-resolve` to skip the live DNS check.
+- `domain-audit` — subdomains from certificate transparency logs and
+  (if installed) theHarvester, live DNS check, interest-scored by name
+  and freshness. Pass `--no-resolve` to skip the live DNS check, or
+  `--no-harvester` to skip theHarvester.
 - `person-check` — mail security posture for the email's domain
   (MX/SPF/DMARC) plus a Gravatar existence check for the address.
 - `infra-check` — resolves the target, reverse-DNS on each IP, a
@@ -54,11 +55,16 @@ Every network call is mocked, so the full suite runs offline. (DNS
 resolution tests are the one exception — they hit real DNS, resolving
 `localhost` and a guaranteed-bogus `.invalid` hostname.)
 
-## What it does right now (v0.3)
+## What it does right now (v0.4)
 
 **domain-audit**
 - Pulls every subdomain seen in certificate transparency logs (crt.sh,
   no API key needed)
+- If [theHarvester](https://github.com/laramies/theHarvester) is
+  installed separately (it's not a BACKHOE dependency — see below),
+  also runs it against a curated set of keyless passive sources for
+  additional subdomains and emails. Findings for the same subdomain
+  from both sources merge into one row instead of duplicating.
 - Flags subdomains with names like `admin`, `dev`, `staging`, `vpn`,
   etc. as higher-interest, and ones from certs issued in the last 30
   days (recently stood-up infra you may not know about)
@@ -104,11 +110,21 @@ resolution tests are the one exception — they hit real DNS, resolving
 - Renders a plain-English summary line plus a sorted, color-coded
   table — highest interest first
 
+## Optional external tool: theHarvester
+
+`domain-audit` shells out to `theHarvester` if it's on `PATH`; it's
+never installed as a BACKHOE dependency (current theHarvester requires
+Python 3.14+, a different runtime than BACKHOE targets). Install it
+separately — e.g. `uv tool install theHarvester` or `pipx install
+theHarvester` — per [its own docs](https://github.com/laramies/theHarvester).
+If it isn't installed, `domain-audit` prints a yellow warning and
+continues without it; pass `--no-harvester` to skip it outright.
+
 ## What's coming next
 
-- theHarvester + SpiderFoot as additional backends, normalized into
-  the same `Finding` schema so results merge instead of piling up
-  separately
+- SpiderFoot as an additional backend — its heavier service-mode
+  architecture (a persistent app with its own DB/API, vs.
+  theHarvester's one-shot CLI) needs its own design pass
 - Shodan/Censys backend for richer port/service data
 - HaveIBeenPwned backend for breach hits (needs an API key)
 - WHOIS-based domain age lookup

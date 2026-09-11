@@ -46,6 +46,8 @@ backhoe/
     portscan.py            bounded common-port TCP connect scan
     tls.py                 live TLS certificate metadata fetch
     netcheck.py            interception canary — see below, read this one
+    theharvester.py        shells out to a separately-installed theHarvester
+                        CLI (not a pip dependency — see "theHarvester" below)
 tests/                   pytest, everything network-mocked except the two
                         real-DNS tests in test_resolve.py
 ```
@@ -82,10 +84,11 @@ fabricated data. Any new feature that does raw TCP/TLS work should
 check this first — DNS-based checks (dns_checks.py) are unaffected and
 don't need it.
 
-## What's shipped (v0.3)
+## What's shipped (v0.4)
 
-- `domain-audit <domain>` — crt.sh subdomain enum, keyword + cert-recency
-  interest scoring, live DNS liveness check (`--no-resolve` to skip)
+- `domain-audit <domain>` — crt.sh subdomain enum, optional theHarvester
+  enrichment (see below), keyword + cert-recency interest scoring, live
+  DNS liveness check (`--no-resolve` to skip)
 - `person-check <email>` — MX/SPF/DMARC for the domain, Gravatar check
   for the address. Verified live against yellowhammertrader.com during
   development: found DMARC is present but `p=none` (monitor-only, not
@@ -94,13 +97,67 @@ don't need it.
 - `infra-check <target>` — resolve + reverse DNS, bounded 9-port scan,
   TLS cert expiry, with the interception guard above
 
-52 tests, all passing, `pytest` from repo root (`pip install -e ".[dev]"`
+70 tests, all passing, `pytest` from repo root (`pip install -e ".[dev]"`
 first).
+
+## theHarvester (v0.4) — subprocess, not a dependency
+
+`backends/theharvester.py` shells out to the separately-installed
+`theHarvester` CLI (github.com/laramies/theHarvester) for `domain-audit`.
+Verified against that project's actual current source (cloned and read
+during development, not assumed from memory) before writing the parser:
+
+- Current theHarvester requires **Python 3.14+** — a different runtime
+  than BACKHOE targets (3.10-3.12), so it can never be a pip dependency
+  here. It's invoked via `shutil.which("theHarvester")` + `subprocess.run`,
+  same as any other external tool the operator installs themselves.
+- Its `-f NAME` flag writes `NAME.json` with (among other keys) `hosts`
+  and `emails` — the two we map to `Finding`s. `ips` is deliberately
+  *not* mapped: that's infra-check's job, and mapping it here without
+  also doing the PTR lookup `IP_ADDRESS` scoring assumes would violate
+  "fail loud, never fake."
+- `DEFAULT_SOURCES` is a curated, keyless-only source list (not `-b all`)
+  verified against theHarvester's own source table
+  (`lib/source_catalog.py`) — sources needing an unconfigured API key
+  are skipped by theHarvester itself with a log line, not a crash, so
+  an occasional wrong guess in this list just no-ops rather than erroring.
+  Deliberately excludes `crtsh`: `domain-audit` already queries crt.sh
+  directly via `backends/crtsh.py`, so including it here would just
+  double-query the same data for `merge_findings()` to dedupe back out
+  (a review caught this before merge).
+- `scoring._score_subdomain`'s confidence is now source-aware: 0.9 (a
+  directly-observed cert) only when `crt.sh` is among the finding's
+  sources, 0.6 for a theHarvester-only subdomain (passive scraping —
+  meaningfully less certain on its own). Previously hardcoded to 0.9
+  for every subdomain regardless of provenance, which stopped being
+  true the moment a second, lower-trust source existed.
+- Not installed → `TheHarvesterNotInstalled` (a `TheHarvesterError`),
+  caught non-fatally in `cli.py` (yellow warning, `domain-audit`
+  continues on crt.sh alone) — same tier as Gravatar in `person-check`.
+  `--no-harvester` skips it outright.
+- Added `schema.merge_findings()` in the same pass: `domain-audit` now
+  has two subdomain-producing backends for the first time, so
+  `Finding.key()`'s existing dedup contract (never wired up before)
+  actually needed calling. Also fixed `scoring._score_email`, which
+  assumed every `EMAIL` finding had been Gravatar-checked
+  (`raw.get("gravatar")` truthy/falsy) — a theHarvester-sourced email
+  has no `"gravatar"` key at all, and the old code would have rendered
+  a false "no public Gravatar profile" for it.
+- **Not run against a live install in this environment** — no way to
+  install real theHarvester here (Python 3.14 unavailable in this
+  sandbox). Tests mock at the `subprocess.run` boundary against the
+  verified JSON shape; the actual CLI invocation (`-d`, `-b`, `-f`
+  flags, exit codes) has not been exercised end-to-end. Worth a real
+  smoke test the first time this runs somewhere with theHarvester
+  actually installed.
 
 ## What's NOT built yet (don't claim otherwise)
 
-- theHarvester / SpiderFoot backends (would need normalizing their
-  output into `Finding` — the schema is ready for it)
+- SpiderFoot backend — much heavier than theHarvester: normally a
+  persistent service with its own SQLite DB and REST API (a lighter
+  `sf.py -s <target> -o json` CLI mode exists too). Deliberately not
+  bundled with theHarvester — different enough integration shape to
+  need its own design pass.
 - Shodan/Censys backend (richer port/service data than the built-in scan)
 - HaveIBeenPwned breach-hit backend (needs an API key — HIBP's
   by-email lookup hasn't been free/keyless since 2019)

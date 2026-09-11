@@ -41,3 +41,20 @@ def test_live_high_interest_subdomain_stays_the_top_finding():
     f = _sub("admin.example.com", first_seen=datetime.now(timezone.utc) - timedelta(days=2), live=True)
     score_finding(f)
     assert f.interest >= 0.75
+
+
+def test_theharvester_only_subdomain_scores_lower_confidence_than_crtsh():
+    # crt.sh confidence reflects a directly-observed, issued certificate.
+    # theHarvester's own sources here are passive scraping (search engines,
+    # wayback, etc.) — meaningfully less certain on their own.
+    crtsh_only = Finding(type=FindingType.SUBDOMAIN, value="a.example.com", source="crt.sh")
+    harvester_only = Finding(type=FindingType.SUBDOMAIN, value="b.example.com", source="theharvester")
+    score_finding(crtsh_only)
+    score_finding(harvester_only)
+    assert harvester_only.confidence < crtsh_only.confidence
+
+
+def test_merged_subdomain_keeps_high_confidence_when_crtsh_is_among_sources():
+    merged = Finding(type=FindingType.SUBDOMAIN, value="a.example.com", source="crt.sh, theharvester")
+    score_finding(merged)
+    assert merged.confidence == 0.9

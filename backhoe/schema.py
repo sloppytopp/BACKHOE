@@ -37,3 +37,27 @@ class Finding:
     def key(self) -> str:
         """Dedup key — same type+value from two sources should merge, not duplicate."""
         return f"{self.type}:{self.value.lower()}"
+
+
+def merge_findings(findings: list[Finding]) -> list[Finding]:
+    """Collapse findings that share a dedup key (same type+value, e.g. the
+    same subdomain surfaced by both crt.sh and theHarvester) into one, so
+    the report shows one row with combined provenance instead of literal
+    duplicates. First finding seen for a key wins for most fields; later
+    ones only fill in what the first left blank.
+    """
+    merged: dict[str, Finding] = {}
+    for f in findings:
+        k = f.key()
+        if k not in merged:
+            merged[k] = f
+            continue
+        existing = merged[k]
+        sources = existing.source.split(", ")
+        if f.source not in sources:
+            existing.source = ", ".join([*sources, f.source])
+        if existing.first_seen is None and f.first_seen is not None:
+            existing.first_seen = f.first_seen
+        if existing.live is None and f.live is not None:
+            existing.live = f.live
+    return list(merged.values())

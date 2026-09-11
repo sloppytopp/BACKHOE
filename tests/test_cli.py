@@ -4,7 +4,9 @@ from click.testing import CliRunner
 
 from backhoe.backends.dns_checks import DnsCheckError
 from backhoe.backends.gravatar import GravatarError
+from backhoe.backends.theharvester import TheHarvesterError, TheHarvesterNotInstalled
 from backhoe.cli import cli
+from backhoe.schema import Finding, FindingType
 
 
 def test_person_check_rejects_invalid_email():
@@ -31,6 +33,57 @@ def test_person_check_happy_path_continues_without_gravatar():
     assert result.exit_code == 0
     assert "Gravatar check skipped" in result.output
     assert "example.com" in result.output
+
+
+def test_domain_audit_warns_and_continues_when_theharvester_not_installed():
+    runner = CliRunner()
+    with patch("backhoe.cli.crtsh.run", return_value=[]), patch(
+        "backhoe.cli.theharvester.run", side_effect=TheHarvesterNotInstalled("not found")
+    ):
+        result = runner.invoke(cli, ["domain-audit", "example.com", "--no-resolve"])
+
+    assert result.exit_code == 0
+    assert "theHarvester" in result.output
+
+
+def test_domain_audit_warns_and_continues_on_theharvester_error():
+    runner = CliRunner()
+    with patch("backhoe.cli.crtsh.run", return_value=[]), patch(
+        "backhoe.cli.theharvester.run", side_effect=TheHarvesterError("exited 1: boom")
+    ):
+        result = runner.invoke(cli, ["domain-audit", "example.com", "--no-resolve"])
+
+    assert result.exit_code == 0
+    assert "boom" in result.output
+
+
+def test_domain_audit_skips_theharvester_with_no_harvester_flag():
+    runner = CliRunner()
+    with patch("backhoe.cli.crtsh.run", return_value=[]), patch(
+        "backhoe.cli.theharvester.run"
+    ) as harvester_mock:
+        result = runner.invoke(cli, ["domain-audit", "example.com", "--no-resolve", "--no-harvester"])
+
+    assert result.exit_code == 0
+    harvester_mock.assert_not_called()
+
+
+def test_domain_audit_merges_duplicate_subdomains_from_both_sources():
+    runner = CliRunner()
+    crtsh_finding = Finding(type=FindingType.SUBDOMAIN, value="www.example.com", source="crt.sh")
+    harvester_finding = Finding(type=FindingType.SUBDOMAIN, value="www.example.com", source="theharvester")
+
+    with patch("backhoe.cli.crtsh.run", return_value=[crtsh_finding]), patch(
+        "backhoe.cli.theharvester.run", return_value=[harvester_finding]
+    ):
+        result = runner.invoke(cli, ["domain-audit", "example.com", "--no-resolve"])
+
+    assert result.exit_code == 0
+    assert result.output.count("www.example.com") == 1
+    # both source names present — exact layout may wrap across lines at
+    # narrow console widths, so don't assert on the literal joined string
+    assert "crt.sh" in result.output
+    assert "theharvester" in result.output
 
 
 def test_infra_check_accepts_a_bare_ip():
