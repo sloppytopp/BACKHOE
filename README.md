@@ -26,10 +26,9 @@ pip install -e .
 ## Use
 
 ```bash
-backhoe domain-audit yellowhammertrader.com
-backhoe person-check admin@yellowhammertrader.com
-backhoe infra-check yellowhammertrader.com
-```
+backhoe domain-audit <target domain>  
+backhoe person-check admim@<target person>
+backhoe infra-check <targetXXX.com>```
 
 One command, one target, one readable report — no module picker, no
 target-type dropdown.
