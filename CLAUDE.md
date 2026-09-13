@@ -39,6 +39,8 @@ backhoe/
                         a sorted, color-coded rich table
   resolve.py             DNS liveness check used by domain-audit
   cli.py                 click group; domain-audit / person-check / infra-check
+  keys.py                 generic API-key resolution/storage/prompt wizard —
+                        see "Shodan" below for its first consumer
   backends/
     crtsh.py             certificate transparency subdomain enum (no API key)
     dns_checks.py         MX/SPF/DMARC/PTR — real DNS, no API key
@@ -50,6 +52,8 @@ backhoe/
                         CLI (not a pip dependency — see "theHarvester" below)
     spiderfoot.py           shells out to a separately-installed SpiderFoot
                         checkout (not a pip dependency — see "SpiderFoot" below)
+    shodan.py               Shodan host-lookup enrichment for infra-check,
+                        needs an API key via keys.py — see "Shodan" below
 tests/                   pytest, everything network-mocked except the two
                         real-DNS tests in test_resolve.py
 ```
@@ -97,9 +101,10 @@ don't need it.
   enforcing) — a real, actionable finding, worth following up on for
   the actual business domain independent of this tool's development.
 - `infra-check <target>` — resolve + reverse DNS, bounded 9-port scan,
-  TLS cert expiry, with the interception guard above
+  TLS cert expiry, with the interception guard above, plus optional
+  Shodan host-lookup enrichment (see below)
 
-89 tests, all passing, `pytest` from repo root (`pip install -e ".[dev]"`
+123 tests, all passing, `pytest` from repo root (`pip install -e ".[dev]"`
 first).
 
 ## Three gap fixes (2026-09-11), applied via TDD after independent verification
@@ -239,9 +244,82 @@ hadn't caught:
   mapped, for the same reason theHarvester's `ips` is skipped: IP
   addresses belong to infra-check's PTR-lookup-backed handling, not here.
 
+## Shodan (v0.4) — API-key wizard + host-lookup backend for infra-check
+
+`backends/shodan.py` calls Shodan's REST API directly with plain
+`requests` (no `shodan` SDK dependency, same pattern as crtsh.py and
+gravatar.py) to enrich `infra-check`'s open-port findings with
+service/product/version data and known CVEs — richer than what BACKHOE's
+own bounded TCP connect scan (`portscan.py`) can see on its own. Unlike
+theHarvester/SpiderFoot, Shodan needs an API key, which is where
+`keys.py` comes in:
+
+- **`keys.py` is a generic, provider-agnostic key wizard**, built so
+  Shodan isn't a one-off: a new keyed backend (Censys, HIBP) registers a
+  `KeyProvider(name, env_var, prompt_label, validate)` and gets the same
+  resolution flow for free. Resolution order in `get_api_key(provider)`:
+  1. `provider.env_var` (`SHODAN_API_KEY` for Shodan) — used directly, no
+     file I/O, no validation, no prompt. The escape hatch for CI/scripted
+     runs.
+  2. A key already stored in `~/.config/backhoe/keys.json` — re-validated
+     live on *every* call via `provider.validate()`. Confirmed invalid ->
+     warn and re-prompt. Inconclusive (network blip, provider outage,
+     raises `KeyValidationError`) -> warn once and use the stale key
+     anyway, since "can't confirm" is not the same as "confirmed wrong."
+  3. Neither of the above -> interactive hidden-input prompt. Blank input
+     skips and returns `None` (not an error — same tier as any other
+     opt-in source being unavailable); a non-blank entry is validated
+     before saving, with one retry on a confirmed-bad entry.
+  The stored-key file is written with restrictive `0o600`/`0o700`
+  permissions set via `os.umask`/`os.open` at creation time, not
+  chmod'd down after the fact, to avoid a TOCTOU window where the
+  plaintext key is briefly world-readable.
+- `shodan.validate_key()` hits Shodan's `/api-info` endpoint, confirmed
+  in Shodan's own docs to cost no query credit — what makes it safe for
+  `keys.py` to re-validate a stored key on every single `infra-check`
+  run without burning the operator's quota.
+- `shodan.lookup_host(ip, key)` hits `/shodan/host/<ip>`. A 404 (host not
+  indexed by Shodan) returns an empty list — a legitimate empty result,
+  not a failure. Any other non-200, a network error, or unparseable JSON
+  raises `ShodanAPIError`. Every optional response field (`product`,
+  `version`, `vulns`, the module name) is read with `.get()`, never
+  assumed present.
+- The `vulns` field's on-the-wire shape (a list of CVE-id strings vs. a
+  dict keyed by CVE id) isn't confirmed from Shodan's own docs — see the
+  verification note below — so `_extract_vuln_ids()` handles both
+  instead of guessing one and breaking silently on the other.
+- Wired into `infra-check` via a new `--shodan/--no-shodan` flag
+  (default on). **Deliberately runs outside the `netcheck.py`
+  interception guard**: it's a passive API call to Shodan's servers, not
+  raw TCP/TLS from this host, so it stays trustworthy — and is a real
+  capability gain — even on a network where the built-in port scan and
+  TLS fetch have to be skipped entirely.
+- `ShodanAPIError` is caught non-fatally in `cli.py` (yellow warning,
+  `infra-check` continues on whatever it already has) — same tier as
+  Gravatar, theHarvester, and SpiderFoot. If `keys.get_api_key()` returns
+  `None` (no env var, no stored key, blank prompt), Shodan enrichment is
+  skipped silently — that's a normal "opted out," not a warning-worthy
+  failure.
+- `infra-check` now calls `schema.merge_findings()` for the first time
+  (mirrors `domain-audit`): Shodan and the built-in port scanner can both
+  report an `OPEN_PORT` finding for the same `ip:port`, and
+  `scoring._score_open_port`'s Task-3 fix (reads the port from
+  `Finding.value`, not `raw`) is what makes merging those two sources
+  safe to score correctly.
+- **Not run against a live Shodan account in this environment** — no
+  Shodan API key or live network access was available during
+  development. This backend is built from Shodan's published API docs
+  (host-lookup and `/api-info` endpoints) and tested entirely against
+  mocked HTTP responses, not exercised against a real account end to
+  end. In particular, the exact shape of `vulns` in a live response
+  (handled defensively above) and which optional fields Shodan's free
+  tier actually populates are unconfirmed — worth a real smoke test the
+  first time this runs somewhere with a live Shodan key.
+
 ## What's NOT built yet (don't claim otherwise)
 
-- Shodan/Censys backend (richer port/service data than the built-in scan)
+- Censys backend (Shodan is now built — see above; Censys would be a
+  similar richer-port-data source, still not built)
 - HaveIBeenPwned breach-hit backend (needs an API key — HIBP's
   by-email lookup hasn't been free/keyless since 2019)
 - WHOIS-based domain age — note: WHOIS uses TCP port 43, which the
