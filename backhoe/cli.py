@@ -13,10 +13,12 @@ import sys
 
 import click
 
-from .backends import crtsh, dns_checks, netcheck, portscan, spiderfoot, theharvester, tls
+from . import keys
+from .backends import crtsh, dns_checks, netcheck, portscan, shodan, spiderfoot, theharvester, tls
 from .backends.crtsh import CrtShError
 from .backends.dns_checks import DnsCheckError
 from .backends.gravatar import GravatarError, check_gravatar
+from .backends.shodan import SHODAN_PROVIDER, ShodanAPIError
 from .backends.spiderfoot import SpiderFootError, SpiderFootNotInstalled
 from .backends.theharvester import TheHarvesterError, TheHarvesterNotInstalled
 from .backends.tls import TlsError
@@ -175,11 +177,24 @@ def person_check(email: str):
     default=True,
     help="Run the bounded common-port scan (default: on). Only use against infra you own or are authorized to test.",
 )
-def infra_check(target: str, ports: bool):
+@click.option(
+    "--shodan/--no-shodan",
+    "shodan_",  # avoid shadowing the imported `shodan` module below
+    default=True,
+    help=(
+        "Enrich open-port findings with Shodan host-lookup data (service, "
+        "product/version, known CVEs) if an API key is available (default: "
+        "on). Runs even when this network intercepts TCP/TLS, since it's a "
+        "passive API lookup, not raw TCP from this host. Prompts for a "
+        "SHODAN_API_KEY the first time if none is set or stored."
+    ),
+)
+def infra_check(target: str, ports: bool, shodan_: bool):
     """
     Run an infrastructure recon profile against a domain or IP: resolved
-    IPs + reverse DNS, a bounded common-port scan, and the live TLS
-    certificate's expiry.
+    IPs + reverse DNS, a bounded common-port scan, the live TLS
+    certificate's expiry, and (if a key is available) Shodan host-lookup
+    enrichment.
     """
     click.echo(f"Running infra-check against {target}...\n")
 
@@ -247,6 +262,20 @@ def infra_check(target: str, ports: bool):
         except TlsError as exc:
             click.secho(f"TLS certificate check skipped: {exc}", fg="yellow", err=True)
 
+    if shodan_:
+        # Deliberately outside the interception guard above: this is a
+        # passive API lookup, not raw TCP from this host, so it stays
+        # trustworthy even on a network that intercepts TCP/TLS.
+        key = keys.get_api_key(SHODAN_PROVIDER)
+        if key:
+            click.echo("Enriching with Shodan host-lookup data...\n")
+            for ip in ips:
+                try:
+                    findings.extend(shodan.lookup_host(ip, key))
+                except ShodanAPIError as exc:
+                    click.secho(f"Shodan lookup skipped for {ip}: {exc}", fg="yellow", err=True)
+
+    findings = merge_findings(findings)
     findings = score_all(findings)
     render_report(target, findings)
 
