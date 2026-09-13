@@ -49,11 +49,19 @@ class ShodanValidationError(ShodanError, KeyValidationError):
     reason to reprompt."""
 
 
+def _redact_key(text: str, key: str) -> str:
+    """Never let the raw API key reach a message a caller might print
+    (click.secho, terminal scrollback, logs) — `requests` embeds the
+    full request URL, key querystring included, in a ConnectionError's
+    own message."""
+    return text.replace(key, "<redacted>") if key else text
+
+
 def validate_key(key: str) -> bool:
     try:
         resp = requests.get(f"{BASE_URL}/api-info", params={"key": key}, timeout=DEFAULT_TIMEOUT)
     except requests.RequestException as exc:
-        raise ShodanValidationError(f"network error contacting Shodan: {exc}") from exc
+        raise ShodanValidationError(f"network error contacting Shodan: {_redact_key(str(exc), key)}") from exc
 
     if resp.status_code == 200:
         return True
@@ -66,7 +74,7 @@ def lookup_host(ip: str, key: str) -> list[Finding]:
     try:
         resp = requests.get(f"{BASE_URL}/shodan/host/{ip}", params={"key": key}, timeout=DEFAULT_TIMEOUT)
     except requests.RequestException as exc:
-        raise ShodanAPIError(f"network error contacting Shodan: {exc}") from exc
+        raise ShodanAPIError(f"network error contacting Shodan: {_redact_key(str(exc), key)}") from exc
 
     if resp.status_code == 404:
         return []
@@ -96,23 +104,39 @@ def _extract_vuln_ids(entry: dict) -> list[str]:
 
 
 def _to_findings(ip: str, data: dict) -> list[Finding]:
-    findings: list[Finding] = []
+    # Shodan can return multiple data[] entries for the same port (different
+    # banners/modules/vhosts observed on it). Group by port BEFORE building
+    # Finding objects so each port produces exactly one Finding — otherwise
+    # two same-port entries would share the same dedup key AND the same
+    # source string ("shodan"), and merge_findings() would let the second
+    # entry's raw payload silently overwrite the first's (e.g. losing a CVE).
+    by_port: dict[int, dict] = {}
     for entry in data.get("data", []):
         port = entry.get("port")
         if port is None:
             continue
+        merged = by_port.setdefault(
+            port, {"service": None, "product": None, "version": None, "vulns": []}
+        )
+        service = (entry.get("_shodan") or {}).get("module")
+        if merged["service"] is None and service is not None:
+            merged["service"] = service
+        if merged["product"] is None and entry.get("product") is not None:
+            merged["product"] = entry.get("product")
+        if merged["version"] is None and entry.get("version") is not None:
+            merged["version"] = entry.get("version")
+        for v in _extract_vuln_ids(entry):
+            if v not in merged["vulns"]:
+                merged["vulns"].append(v)
+
+    findings: list[Finding] = []
+    for port, payload in by_port.items():
         findings.append(
             Finding(
                 type=FindingType.OPEN_PORT,
                 value=f"{ip}:{port}",
                 source="shodan",
-                raw={
-                    "port": port,
-                    "service": (entry.get("_shodan") or {}).get("module"),
-                    "product": entry.get("product"),
-                    "version": entry.get("version"),
-                    "vulns": _extract_vuln_ids(entry),
-                },
+                raw={"port": port, **payload},
             )
         )
     return findings

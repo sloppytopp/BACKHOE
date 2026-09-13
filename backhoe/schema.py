@@ -96,3 +96,20 @@ def merge_findings(findings: list[Finding]) -> list[Finding]:
             existing.raw[f.source] = f.raw
 
     return list(merged.values())
+
+
+def raw_get(finding: Finding, key: str, default=None):
+    """Read one field from a Finding's `raw`, correct whether or not
+    merge_findings() has reshaped it into {source: {...}}. Returns the
+    first non-None value found across sources post-merge, or `default`
+    if no source has it. Use this instead of `finding.raw.get(key)` in
+    any reader that might run on a finding merge_findings() could touch
+    — a flat `.get()` silently returns None post-reshape instead of
+    finding the value nested under a source key."""
+    if not finding.merged_raw:
+        return finding.raw.get(key, default)
+    for payload in finding.raw.values():
+        value = payload.get(key)
+        if value is not None:
+            return value
+    return default

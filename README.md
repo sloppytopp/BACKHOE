@@ -42,8 +42,13 @@ target-type dropdown.
 - `person-check` — mail security posture for the email's domain
   (MX/SPF/DMARC) plus a Gravatar existence check for the address.
 - `infra-check` — resolves the target, reverse-DNS on each IP, a
-  bounded common-port scan, and the live TLS certificate's expiry.
-  Pass `--no-ports` to skip the port scan.
+  bounded common-port scan, the live TLS certificate's expiry, and (if
+  a Shodan API key is available) Shodan host-lookup enrichment with
+  service/product/version and known-CVE data. Pass `--no-ports` to
+  skip the port scan, `--no-shodan` to skip Shodan. With `--shodan`
+  (the default) and no `SHODAN_API_KEY` env var or stored key yet,
+  `infra-check` prompts for one interactively on first run — see
+  "Optional: Shodan enrichment" below.
 
 ## Test
 
@@ -91,6 +96,11 @@ resolution tests are the one exception — they hit real DNS, resolving
   high-interest if exposed
 - Live TLS certificate expiry — flags an expired or soon-to-expire
   cert as high/medium-interest
+- (Optional) Shodan host-lookup enrichment for open ports — service,
+  product/version, and known CVEs, when available — if you provide a
+  free Shodan API key. Runs independently of the interception check
+  below since it's a passive third-party API call, not raw TCP from
+  this host. See "Optional: Shodan enrichment" below.
 - **Detects transparent network interception before trusting any of
   the above.** Corporate proxies, security sandboxes, and some VPNs
   transparently intercept all outbound TCP/TLS traffic and answer on
@@ -131,10 +141,36 @@ If either isn't found, `domain-audit` prints a yellow warning and
 continues without it — same non-fatal tier as the Gravatar check in
 `person-check`.
 
+## Optional: Shodan enrichment
+
+`infra-check` enriches open-port findings with Shodan host-lookup data
+(service, product/version, and known CVEs) if you provide a
+[Shodan](https://www.shodan.io/) API key — Shodan is a keyed API, not
+an installable tool, so this doesn't need anything on `PATH`.
+
+Resolution order: a `SHODAN_API_KEY` environment variable, then a key
+already stored at `~/.config/backhoe/keys.json` (created `0600`,
+directory `0700`), then an interactive prompt on first run (hidden
+input, like a password) — leave it blank to skip. Skip Shodan entirely
+with `--no-shodan`.
+
+Runs even on a network `infra-check` detects as intercepting TCP/TLS
+(see above) — it's a passive API call to Shodan, not raw TCP from this
+host, so it stays trustworthy where the built-in port scan and TLS
+fetch don't.
+
+**Verification note:** built from Shodan's published API docs and
+tested against mocked HTTP responses only — not yet run against a live
+Shodan account end-to-end in this environment.
+
 ## What's coming next
 
-- Shodan/Censys backend for richer port/service data
+- Censys backend for richer port/service data (an alternative to, or
+  complement of, Shodan)
 - HaveIBeenPwned backend for breach hits (needs an API key)
 - WHOIS-based domain age lookup
-- A setup wizard that tests each API key live and reports which
-  backends are actually usable before a scan runs
+- A standalone setup wizard that tests each configured API key live
+  and reports which backends are actually usable before a scan runs
+  (the interactive per-backend key prompt already exists — see
+  "Optional: Shodan enrichment" above — this would be a single
+  upfront command covering all keyed backends at once)

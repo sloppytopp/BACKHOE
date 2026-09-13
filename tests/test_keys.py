@@ -14,6 +14,12 @@ def _isolate_key_file(tmp_path, monkeypatch):
     key_dir = tmp_path / "backhoe-keys"
     monkeypatch.setattr(keys_module, "KEY_DIR", key_dir)
     monkeypatch.setattr(keys_module, "KEY_FILE", key_dir / "keys.json")
+    # Most tests in this file exercise the interactive-prompt path, which
+    # now short-circuits to None when stdin isn't a tty (see
+    # test_prompt_skipped_silently_when_stdin_is_not_a_tty for that case
+    # specifically). pytest's own captured stdin is never a real tty, so
+    # default it to True here and let that one test override it.
+    monkeypatch.setattr(keys_module.sys.stdin, "isatty", lambda: True)
 
 
 def _provider(validate):
@@ -163,6 +169,26 @@ def test_write_key_uses_restrictive_permissions_at_creation_time(tmp_path, monke
     # Verify the file was actually created with those permissions
     actual_mode = stat.S_IMODE(keys_module.KEY_FILE.stat().st_mode)
     assert actual_mode == stat.S_IRUSR | stat.S_IWUSR
+
+
+def test_prompt_skipped_silently_when_stdin_is_not_a_tty(tmp_path, monkeypatch):
+    # Non-interactive contexts (CI, cron, a pipe, closed stdin) must not
+    # hit click.prompt's EOF -> click.Abort path, which would kill the
+    # whole command after real work (resolved IPs, port scan, TLS cert)
+    # was already collected. get_api_key() should just return None, same
+    # tier as a blank answer at a real prompt.
+    _isolate_key_file(tmp_path, monkeypatch)
+    monkeypatch.delenv("TESTPROV_API_KEY", raising=False)
+    monkeypatch.setattr(keys_module.sys.stdin, "isatty", lambda: False)
+    validate = MagicMock(side_effect=AssertionError("must not be called"))
+    prompt_mock = MagicMock(side_effect=AssertionError("must not be called"))
+
+    with patch("backhoe.keys.click.prompt", prompt_mock):
+        result = get_api_key(_provider(validate))
+
+    assert result is None
+    prompt_mock.assert_not_called()
+    assert not keys_module.KEY_FILE.exists()
 
 
 def test_write_failure_propagates_original_exception_not_bad_file_descriptor(tmp_path, monkeypatch):

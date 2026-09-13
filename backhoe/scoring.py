@@ -14,7 +14,7 @@ able to see *why* something scored high.
 
 from datetime import datetime, timedelta, timezone
 
-from .schema import Finding, FindingType
+from .schema import Finding, FindingType, raw_get
 
 # Subdomain name fragments that tend to indicate higher-value targets —
 # admin panels, dev/staging environments, forgotten infra, etc.
@@ -123,7 +123,7 @@ def _score_open_port(finding: Finding) -> None:
 
 def _score_certificate(finding: Finding) -> None:
     finding.confidence = 0.9
-    days_left = finding.raw.get("days_until_expiry")
+    days_left = raw_get(finding, "days_until_expiry")
     if days_left is None:
         finding.interest = 0.3
     elif days_left < 0:
@@ -178,7 +178,7 @@ def _score_dns_record(finding: Finding) -> None:
 def _score_ip_address(finding: Finding) -> None:
     finding.confidence = 0.95
     finding.interest = 0.15
-    if not finding.raw.get("ptr"):
+    if not raw_get(finding, "ptr"):
         finding.note = finding.note or "no reverse DNS (PTR) record"
 
 

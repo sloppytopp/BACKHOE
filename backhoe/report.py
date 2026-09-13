@@ -13,7 +13,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 
-from .schema import Finding, FindingType
+from .schema import Finding, FindingType, raw_get
 
 console = Console()
 
@@ -74,13 +74,13 @@ def _synthesize_summary(target: str, findings: list[Finding]) -> str:
 
     certs = by_type.get(FindingType.CERTIFICATE, [])
     for f in certs:
-        days_left = f.raw.get("days_until_expiry")
+        days_left = raw_get(f, "days_until_expiry")
         if days_left is not None and days_left < 30:
             lines.append(f"TLS certificate for {f.value} expires in {days_left} day(s).")
 
     ips = by_type.get(FindingType.IP_ADDRESS, [])
     if ips:
-        no_ptr = sum(1 for f in ips if not f.raw.get("ptr"))
+        no_ptr = sum(1 for f in ips if not raw_get(f, "ptr"))
         lines.append(
             f"{len(ips)} IP(s) resolved" + (f", {no_ptr} with no reverse DNS record." if no_ptr else ".")
         )

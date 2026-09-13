@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -91,6 +92,13 @@ def _write_stored_key(name: str, key: str) -> None:
 
 
 def _prompt_for_key(provider: KeyProvider) -> str | None:
+    if not sys.stdin.isatty():
+        # No interactive terminal to prompt on (CI, cron, a pipe, closed
+        # stdin) — skip silently rather than let click.prompt hit EOF and
+        # raise Abort, which would kill the whole command after real work
+        # (resolved IPs, port scan, TLS cert) was already collected and
+        # about to render. Same tier as a blank/skip answer at a real prompt.
+        return None
     for _attempt in range(2):
         entered = click.prompt(
             f"{provider.prompt_label} (leave blank to skip)",

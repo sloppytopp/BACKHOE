@@ -135,3 +135,36 @@ def test_open_port_vulns_boost_survives_merge_reshape():
     score_finding(f)
     assert f.interest == 1.0
     assert "CVE-2022-9999" in f.note
+
+
+def test_certificate_days_until_expiry_read_survives_merge_reshape():
+    # Same landmine as OPEN_PORT: if a CERTIFICATE finding is ever merged
+    # (same key colliding across two sources), raw becomes
+    # {source: {...}} and a flat raw.get("days_until_expiry") would
+    # silently return None instead of finding it nested under a source.
+    f = Finding(
+        type=FindingType.CERTIFICATE,
+        value="example.com",
+        source="tls, other",
+        raw={"tls": {"days_until_expiry": 5}, "other": {}},
+    )
+    f.merged_raw = True
+    score_finding(f)
+    assert f.interest >= 0.85
+    assert "5 day(s)" in f.note
+
+
+def test_ip_address_ptr_read_survives_merge_reshape():
+    # A concrete reachable path: DNS resolving the same IP twice produces
+    # two IP_ADDRESS findings from the same source ("dns") that collide
+    # and reshape. A flat raw.get("ptr") post-reshape would fabricate "no
+    # reverse DNS" for a host that actually has a PTR record.
+    f = Finding(
+        type=FindingType.IP_ADDRESS,
+        value="1.2.3.4",
+        source="dns",
+        raw={"dns": {"ptr": "host.example.com"}},
+    )
+    f.merged_raw = True
+    score_finding(f)
+    assert "no reverse DNS" not in f.note

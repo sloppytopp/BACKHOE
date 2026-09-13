@@ -124,6 +124,55 @@ def test_lookup_host_skips_entries_with_no_port():
     assert findings == []
 
 
+def test_validate_key_error_never_leaks_raw_key():
+    # requests' own ConnectionError message embeds the full request URL,
+    # key querystring included — the wrapping ShodanValidationError must
+    # never repeat that key, or it leaks into anything a caller prints
+    # (click.secho, terminal scrollback).
+    key = "SUPERSECRET123"
+    err = requests.ConnectionError(
+        f"HTTPSConnectionPool(host='api.shodan.io', port=443): Max retries exceeded with "
+        f"url: /api-info?key={key} (Caused by NewConnectionError(...))"
+    )
+    with patch("backhoe.backends.shodan.requests.get", side_effect=err):
+        with pytest.raises(ShodanValidationError) as excinfo:
+            shodan.validate_key(key)
+    assert key not in str(excinfo.value)
+
+
+def test_lookup_host_error_never_leaks_raw_key():
+    key = "SUPERSECRET123"
+    err = requests.ConnectionError(
+        f"HTTPSConnectionPool(host='api.shodan.io', port=443): Max retries exceeded with "
+        f"url: /shodan/host/1.2.3.4?key={key} (Caused by NewConnectionError(...))"
+    )
+    with patch("backhoe.backends.shodan.requests.get", side_effect=err):
+        with pytest.raises(ShodanAPIError) as excinfo:
+            shodan.lookup_host("1.2.3.4", key)
+    assert key not in str(excinfo.value)
+
+
+def test_lookup_host_merges_duplicate_entries_on_same_port():
+    # Shodan can return multiple data[] entries for the same port (different
+    # banners/modules on it). Two entries on the same port must produce
+    # exactly ONE Finding, with vulns unioned and a real product value not
+    # overwritten by a later entry's None.
+    payload = {
+        "data": [
+            {"port": 443, "product": "nginx", "vulns": ["CVE-2021-1234"]},
+            {"port": 443, "product": None, "vulns": []},
+        ]
+    }
+    with patch("backhoe.backends.shodan.requests.get", return_value=_response(200, payload)):
+        findings = shodan.lookup_host("1.2.3.4", "key")
+
+    port_443_findings = [f for f in findings if f.value == "1.2.3.4:443"]
+    assert len(port_443_findings) == 1
+    f = port_443_findings[0]
+    assert f.raw["vulns"] == ["CVE-2021-1234"]
+    assert f.raw["product"] == "nginx"
+
+
 def test_shodan_provider_is_registered_correctly():
     assert shodan.SHODAN_PROVIDER.name == "shodan"
     assert shodan.SHODAN_PROVIDER.env_var == "SHODAN_API_KEY"
