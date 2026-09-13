@@ -67,10 +67,47 @@ SENSITIVE_PORTS = {21: "ftp", 22: "ssh", 23: "telnet", 3306: "mysql", 3389: "rdp
 EXPECTED_WEB_PORTS = {80, 443}
 
 
+def _parse_port(finding: Finding) -> int | None:
+    """Port for an OPEN_PORT finding, read from `value` ("ip:port") rather
+    than `raw` — `raw` gets reshaped to {source: {...}} by merge_findings()
+    the moment a second source collides on the same key (see schema.py),
+    at which point `raw.get("port")` silently returns None. `value` is
+    never reshaped, so this works whether or not a merge happened."""
+    try:
+        return int(finding.value.rsplit(":", 1)[-1])
+    except (ValueError, IndexError):
+        return None
+
+
+def _iter_raw_payloads(finding: Finding):
+    """Yield each source's raw payload dict — handles both the common
+    unmerged case (`raw` is one flat dict) and the post-merge case (`raw`
+    is `{source_name: {...}, ...}`, per merge_findings()'s contract)."""
+    if finding.merged_raw:
+        yield from finding.raw.values()
+    else:
+        yield finding.raw
+
+
+def _collect_vulns(finding: Finding) -> list[str]:
+    vulns: list[str] = []
+    for payload in _iter_raw_payloads(finding):
+        for v in payload.get("vulns") or []:
+            if v not in vulns:
+                vulns.append(v)
+    return vulns
+
+
 def _score_open_port(finding: Finding) -> None:
     finding.confidence = 0.95
-    port = finding.raw.get("port")
-    if port in SENSITIVE_PORTS:
+    port = _parse_port(finding)
+    vulns = _collect_vulns(finding)
+
+    if vulns:
+        finding.interest = 1.0
+        shown = ", ".join(vulns[:3]) + ("..." if len(vulns) > 3 else "")
+        finding.note = finding.note or f"{len(vulns)} known CVE(s) reported for this service: {shown}"
+    elif port in SENSITIVE_PORTS:
         finding.interest = 0.85
         finding.note = finding.note or (
             f"port {port} ({SENSITIVE_PORTS[port]}) is open — confirm this is "

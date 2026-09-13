@@ -87,3 +87,51 @@ def test_email_never_claims_a_gravatar_check_that_never_happened():
     f = Finding(type=FindingType.EMAIL, value="a@example.com", source="theharvester", raw={})
     score_finding(f)
     assert "gravatar" not in f.note.lower()
+
+
+def test_open_port_parses_port_from_value_after_raw_is_merge_reshaped():
+    # Simulates the state merge_findings() leaves behind when a second
+    # source collides on the same key: raw becomes {source: {...}}
+    # instead of a flat dict, so a value-based port read needs to survive
+    # it (raw.get("port") would silently return None here).
+    f = Finding(
+        type=FindingType.OPEN_PORT,
+        value="1.2.3.4:3306",
+        source="portscan, shodan",
+        raw={"portscan": {"port": 3306, "service": "mysql"}, "shodan": {"port": 3306, "vulns": []}},
+    )
+    f.merged_raw = True
+    score_finding(f)
+    assert f.interest >= 0.75
+
+
+def test_open_port_with_known_cve_scores_highest_regardless_of_port():
+    f = Finding(
+        type=FindingType.OPEN_PORT, value="1.2.3.4:8080", source="shodan",
+        raw={"port": 8080, "vulns": ["CVE-2021-1234"]},
+    )
+    score_finding(f)
+    assert f.interest == 1.0
+    assert "CVE-2021-1234" in f.note
+
+
+def test_open_port_without_vulns_key_scores_normally():
+    f = Finding(
+        type=FindingType.OPEN_PORT, value="1.2.3.4:443", source="portscan",
+        raw={"port": 443, "service": "https"},
+    )
+    score_finding(f)
+    assert f.interest < 0.3
+
+
+def test_open_port_vulns_boost_survives_merge_reshape():
+    f = Finding(
+        type=FindingType.OPEN_PORT,
+        value="1.2.3.4:443",
+        source="portscan, shodan",
+        raw={"portscan": {"port": 443, "service": "https"}, "shodan": {"port": 443, "vulns": ["CVE-2022-9999"]}},
+    )
+    f.merged_raw = True
+    score_finding(f)
+    assert f.interest == 1.0
+    assert "CVE-2022-9999" in f.note
