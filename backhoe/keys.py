@@ -77,18 +77,15 @@ def _write_stored_key(name: str, key: str) -> None:
         stored[name] = key
         # Use os.open with restrictive mode to ensure the file is created
         # with 0o600 permissions from the start, not world-readable then
-        # chmod'd down retroactively.
+        # chmod'd down retroactively. os.fdopen takes ownership of fd and
+        # closes it on both success and exception paths via the context manager.
         fd = os.open(
             KEY_FILE,
             os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
             stat.S_IRUSR | stat.S_IWUSR,
         )
-        try:
-            with os.fdopen(fd, "w") as f:
-                f.write(json.dumps(stored))
-        except:
-            os.close(fd)
-            raise
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(stored))
     finally:
         os.umask(old_umask)
 

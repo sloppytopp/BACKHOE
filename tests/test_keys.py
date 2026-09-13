@@ -163,3 +163,25 @@ def test_write_key_uses_restrictive_permissions_at_creation_time(tmp_path, monke
     # Verify the file was actually created with those permissions
     actual_mode = stat.S_IMODE(keys_module.KEY_FILE.stat().st_mode)
     assert actual_mode == stat.S_IRUSR | stat.S_IWUSR
+
+
+def test_write_failure_propagates_original_exception_not_bad_file_descriptor(tmp_path, monkeypatch):
+    """Verify that when a write fails (e.g., disk full, serialization error),
+    the original exception propagates cleanly, not masked by 'Bad file descriptor'
+    from trying to close an already-closed fd. Regression test: os.fdopen closes
+    the fd automatically via context manager; a manual os.close() in an except
+    block would double-close and mask the original error."""
+    _isolate_key_file(tmp_path, monkeypatch)
+
+    # Mock json.dumps to raise a custom exception (simulating a write failure)
+    with patch("backhoe.keys.json.dumps", side_effect=ValueError("Simulated disk full error")):
+        try:
+            keys_module._write_stored_key("testprov", "key")
+            assert False, "Expected ValueError to be raised"
+        except ValueError as exc:
+            # Verify we get the ORIGINAL error message, not "Bad file descriptor"
+            assert "Simulated disk full error" in str(exc)
+        except OSError as exc:
+            # If we got here, it means os.close() was called on a closed fd
+            # and masked the original exception — this is the regression
+            assert False, f"Got OSError (likely from double-close fd): {exc}. Original exception was masked!"
