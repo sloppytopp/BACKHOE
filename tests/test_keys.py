@@ -2,6 +2,7 @@
 path in every test so nothing here ever touches the real
 ~/.config/backhoe/keys.json."""
 import json
+import os
 import stat
 from unittest.mock import MagicMock, patch
 
@@ -116,3 +117,49 @@ def test_inconclusive_validation_on_freshly_entered_key_is_saved_anyway(tmp_path
 
     assert result == "fresh-key"
     assert json.loads(keys_module.KEY_FILE.read_text()) == {"testprov": "fresh-key"}
+
+
+def test_corrupt_key_file_triggers_warning_and_continues(tmp_path, monkeypatch, capsys):
+    """Corrupted JSON file should trigger a yellow warning, not silently
+    treat it as 'no stored keys'. This enforces 'fail loud' principle."""
+    _isolate_key_file(tmp_path, monkeypatch)
+    monkeypatch.delenv("TESTPROV_API_KEY", raising=False)
+    # Write an invalid JSON file
+    keys_module.KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    keys_module.KEY_FILE.write_text("not valid json {{{")
+    validate = MagicMock(return_value=True)
+
+    with patch("backhoe.keys.click.prompt", return_value="fresh-key"):
+        result = get_api_key(_provider(validate))
+
+    # Should proceed to prompt and save a fresh key
+    assert result == "fresh-key"
+    # Should have printed a warning about the corrupted file
+    err_output = capsys.readouterr().err
+    assert "corrupted" in err_output or "cannot be parsed" in err_output
+
+
+def test_write_key_uses_restrictive_permissions_at_creation_time(tmp_path, monkeypatch):
+    """Verify that os.open is called with restrictive mode (0o600) to
+    avoid TOCTOU race where API key is briefly world-readable."""
+    _isolate_key_file(tmp_path, monkeypatch)
+    original_open = os.open
+    open_calls = []
+
+    def tracking_open(path, flags, mode=None):
+        open_calls.append((path, flags, mode))
+        return original_open(path, flags, mode)
+
+    monkeypatch.setattr("os.open", tracking_open)
+
+    keys_module._write_stored_key("testprov", "secret-key")
+
+    # Verify os.open was called with mode 0o600
+    key_file_open_calls = [c for c in open_calls if str(c[0]).endswith("keys.json")]
+    assert len(key_file_open_calls) > 0
+    # The mode should be exactly S_IRUSR | S_IWUSR = 0o600
+    path, flags, mode = key_file_open_calls[0]
+    assert mode == (stat.S_IRUSR | stat.S_IWUSR)
+    # Verify the file was actually created with those permissions
+    actual_mode = stat.S_IMODE(keys_module.KEY_FILE.stat().st_mode)
+    assert actual_mode == stat.S_IRUSR | stat.S_IWUSR

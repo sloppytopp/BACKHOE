@@ -58,16 +58,39 @@ def _read_stored_keys() -> dict:
     try:
         return json.loads(KEY_FILE.read_text())
     except ValueError:
+        click.secho(
+            f"Stored key file {KEY_FILE} is corrupted and cannot be parsed — ignoring.",
+            fg="yellow",
+            err=True,
+        )
         return {}
 
 
 def _write_stored_key(name: str, key: str) -> None:
-    KEY_DIR.mkdir(parents=True, exist_ok=True)
-    os.chmod(KEY_DIR, stat.S_IRWXU)
-    stored = _read_stored_keys()
-    stored[name] = key
-    KEY_FILE.write_text(json.dumps(stored))
-    os.chmod(KEY_FILE, stat.S_IRUSR | stat.S_IWUSR)
+    # Use restrictive umask at creation time to avoid TOCTOU race where
+    # the plaintext API key is briefly readable by other local users.
+    old_umask = os.umask(0o077)
+    try:
+        KEY_DIR.mkdir(parents=True, exist_ok=True)
+        os.chmod(KEY_DIR, stat.S_IRWXU)
+        stored = _read_stored_keys()
+        stored[name] = key
+        # Use os.open with restrictive mode to ensure the file is created
+        # with 0o600 permissions from the start, not world-readable then
+        # chmod'd down retroactively.
+        fd = os.open(
+            KEY_FILE,
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            stat.S_IRUSR | stat.S_IWUSR,
+        )
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(json.dumps(stored))
+        except:
+            os.close(fd)
+            raise
+    finally:
+        os.umask(old_umask)
 
 
 def _prompt_for_key(provider: KeyProvider) -> str | None:
