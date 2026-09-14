@@ -1,3 +1,5 @@
+<img src="assets/favicon.png" alt="BACKHOE" width="96" height="96">
+
 # BACKHOE
 
 [![tests](https://github.com/sloppytopp/BACKHOE/actions/workflows/tests.yml/badge.svg)](https://github.com/sloppytopp/BACKHOE/actions/workflows/tests.yml)
