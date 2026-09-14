@@ -247,6 +247,12 @@ handled defensively rather than confirmed live.
   (the interactive per-backend key prompt already exists — see
   "Optional: Shodan enrichment" above — this would be a single
   upfront command covering all keyed backends at once)
+- `pip install backhoe-osint` and a Docker image, both on the way —
+  see `.github/workflows/publish.yml` (publishes automatically on a
+  GitHub Release once PyPI/Docker Hub are set up)
+- A Homebrew tap (`brew install backhoe`) — draft formula at
+  `packaging/homebrew/backhoe.rb`, blocked on a real release existing
+  to generate correct dependency hashes against
 
 ## License
 
