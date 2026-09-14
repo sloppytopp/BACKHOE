@@ -62,11 +62,18 @@ class CensysValidationError(CensysError, KeyValidationError):
 
 def _redact_key(text: str, key: str) -> str:
     """Defensive belt-and-suspenders: Censys's Bearer-token auth means the
-    key never appears in a request URL/query string the way Shodan's did
-    (so this is less likely to ever trigger than Shodan's equivalent), but
-    apply the same redaction anyway — cheap, consistent, and a future
-    error message or proxy layer could still embed a header value."""
-    return text.replace(key, "<redacted>") if key else text
+    key never appears in a request URL/query string the way Shodan's did,
+    but some requests error paths (e.g. InvalidHeader on a key containing
+    a stray control character) embed repr(key) in their message instead
+    of the raw string — the escaped form (\\n, \\r, etc.) never matches a
+    literal .replace() against the raw key, so redact both forms."""
+    if not key:
+        return text
+    text = text.replace(key, "<redacted>")
+    escaped = repr(key)[1:-1]
+    if escaped and escaped != key:
+        text = text.replace(escaped, "<redacted>")
+    return text
 
 
 def validate_key(key: str) -> bool:
@@ -137,26 +144,38 @@ def _to_findings(ip: str, data: dict) -> list[Finding]:
     # would otherwise share a dedup key AND source ("censys"), letting
     # merge_findings() silently let the second overwrite the first's raw
     # payload (the exact Critical bug Shodan's final review caught).
-    resource = (data.get("result") or {}).get("resource") or {}
+    result = data.get("result")
+    if not isinstance(result, dict):
+        raise CensysAPIError("unexpected Censys response shape: no 'result' object in body")
+    resource = result.get("resource")
+    if not isinstance(resource, dict):
+        raise CensysAPIError("unexpected Censys response shape: no 'resource' object in body")
+
     by_port: dict[int, dict] = {}
-    for svc in resource.get("services", []):
-        port = svc.get("port")
-        if port is None:
-            continue
-        merged = by_port.setdefault(
-            port, {"service": None, "product": None, "version": None, "vulns": []}
-        )
-        protocol = svc.get("protocol")
-        if merged["service"] is None and protocol is not None:
-            merged["service"] = protocol
-        for sw in svc.get("software") or []:
-            if merged["product"] is None and sw.get("product") is not None:
-                merged["product"] = sw.get("product")
-            if merged["version"] is None and sw.get("version") is not None:
-                merged["version"] = sw.get("version")
-        for v in _extract_vuln_ids(svc):
-            if v not in merged["vulns"]:
-                merged["vulns"].append(v)
+    try:
+        for svc in resource.get("services", []):
+            port = svc.get("port")
+            if port is None:
+                continue
+            try:
+                port = int(port)
+            except (TypeError, ValueError):
+                continue
+            merged = by_port.setdefault(
+                port, {"service": None, "product": None, "version": None, "vulns": []}
+            )
+            protocol = svc.get("protocol")
+            if merged["service"] is None and protocol is not None:
+                merged["service"] = protocol
+            for sw in svc.get("software") or []:
+                if merged["product"] is None and sw.get("product") is not None:
+                    merged["product"] = sw.get("product")
+                    merged["version"] = sw.get("version")
+            for v in _extract_vuln_ids(svc):
+                if v not in merged["vulns"]:
+                    merged["vulns"].append(v)
+    except (AttributeError, TypeError) as exc:
+        raise CensysAPIError(f"unexpected Censys response shape: {exc}") from exc
 
     findings: list[Finding] = []
     for port, payload in by_port.items():

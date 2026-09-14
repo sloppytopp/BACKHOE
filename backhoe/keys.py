@@ -106,6 +106,7 @@ def _prompt_for_key(provider: KeyProvider) -> str | None:
             show_default=False,
             hide_input=True,
         )
+        entered = entered.strip()
         if not entered:
             return None
         try:
@@ -128,10 +129,11 @@ def _prompt_for_key(provider: KeyProvider) -> str | None:
 def get_api_key(provider: KeyProvider) -> str | None:
     env_value = os.environ.get(provider.env_var)
     if env_value:
-        return env_value
+        return env_value.strip()
 
     stored = _read_stored_keys().get(provider.name)
     if stored:
+        stored = stored.strip()
         try:
             if provider.validate(stored):
                 return stored

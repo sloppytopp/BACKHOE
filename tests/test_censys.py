@@ -234,3 +234,103 @@ def test_censys_provider_is_registered_correctly():
     assert censys.CENSYS_PROVIDER.name == "censys"
     assert censys.CENSYS_PROVIDER.env_var == "CENSYS_API_KEY"
     assert censys.CENSYS_PROVIDER.validate is censys.validate_key
+
+
+def test_lookup_host_raises_on_missing_result_key():
+    payload = {"unexpected": "shape"}
+    with patch("backhoe.backends.censys.requests.get", return_value=_response(200, payload)):
+        with pytest.raises(CensysAPIError):
+            censys.lookup_host("1.2.3.4", "token")
+
+
+def test_lookup_host_raises_on_missing_resource_key():
+    payload = {"result": {"something_else": {}}}
+    with patch("backhoe.backends.censys.requests.get", return_value=_response(200, payload)):
+        with pytest.raises(CensysAPIError):
+            censys.lookup_host("1.2.3.4", "token")
+
+
+def test_lookup_host_raises_on_malformed_services_list():
+    # services is present but its entries aren't dicts (e.g. a schema
+    # Censys never actually uses, but one this code must not crash on
+    # uncaught if it's ever wrong) — must raise CensysAPIError, not an
+    # uncaught AttributeError that would kill the whole infra-check run.
+    payload = {"result": {"resource": {"services": [["port", 443]]}}}
+    with patch("backhoe.backends.censys.requests.get", return_value=_response(200, payload)):
+        with pytest.raises(CensysAPIError):
+            censys.lookup_host("1.2.3.4", "token")
+
+
+def test_lookup_host_empty_services_list_is_legitimate_empty_result():
+    payload = {"result": {"resource": {"services": []}}}
+    with patch("backhoe.backends.censys.requests.get", return_value=_response(200, payload)):
+        assert censys.lookup_host("1.2.3.4", "token") == []
+
+
+def test_lookup_host_normalizes_string_and_int_ports_to_same_finding():
+    # A "443" (string) and 443 (int) port across two service entries must
+    # not produce two separate Findings that then collide in merge_findings
+    # (same dedup key, same source "censys") and silently lose data — the
+    # exact Critical bug Shodan's final review caught, reachable here via
+    # port-type mismatch instead of a duplicate banner.
+    payload = {
+        "result": {
+            "resource": {
+                "services": [
+                    {"port": "443", "vulns": ["CVE-AAAA-1111"]},
+                    {"port": 443, "vulns": ["CVE-BBBB-2222"]},
+                ]
+            }
+        }
+    }
+    with patch("backhoe.backends.censys.requests.get", return_value=_response(200, payload)):
+        findings = censys.lookup_host("1.2.3.4", "token")
+    port_443 = [f for f in findings if f.value == "1.2.3.4:443"]
+    assert len(port_443) == 1
+    assert sorted(port_443[0].raw["vulns"]) == ["CVE-AAAA-1111", "CVE-BBBB-2222"]
+
+
+def test_lookup_host_does_not_mix_product_and_version_from_different_software_entries():
+    # A Censys service's `software` array routinely lists several
+    # genuinely different products (web server + TLS library + framework),
+    # unlike Shodan's data[] entries which are repeat observations of the
+    # same thing. product and version must come from the SAME software
+    # entry, never paired across two different ones.
+    payload = {
+        "result": {
+            "resource": {
+                "services": [
+                    {
+                        "port": 443,
+                        "software": [
+                            {"product": "nginx"},
+                            {"product": "OpenSSL", "version": "1.1.1k"},
+                        ],
+                    }
+                ]
+            }
+        }
+    }
+    with patch("backhoe.backends.censys.requests.get", return_value=_response(200, payload)):
+        findings = censys.lookup_host("1.2.3.4", "token")
+    f = findings[0]
+    assert f.raw["product"] == "nginx"
+    assert f.raw["version"] is None  # nginx's own entry had no version — must NOT be OpenSSL's "1.1.1k"
+
+
+def test_validate_key_error_never_leaks_raw_key_via_escaped_form():
+    # requests.exceptions.InvalidHeader (raised when building the
+    # Authorization header from a key containing a control character like
+    # a newline) embeds repr(key) in its message — the escaped \n form,
+    # not the raw byte — which a plain .replace(key, ...) never matches.
+    key = "SECRET\nTOKEN"
+    err = requests.exceptions.InvalidHeader(
+        f"Invalid leading whitespace, reserved character(s), or return character(s) "
+        f"in header value: 'Bearer {key}'"
+    )
+    with patch("backhoe.backends.censys.requests.get", side_effect=err):
+        with pytest.raises(CensysValidationError) as excinfo:
+            censys.validate_key(key)
+    assert key not in str(excinfo.value)
+    assert "SECRET" not in str(excinfo.value)
+    assert "TOKEN" not in str(excinfo.value)

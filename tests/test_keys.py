@@ -37,6 +37,17 @@ def test_env_var_short_circuits_and_never_validates(tmp_path, monkeypatch):
     validate.assert_not_called()
 
 
+def test_env_var_key_is_stripped_of_surrounding_whitespace(tmp_path, monkeypatch):
+    _isolate_key_file(tmp_path, monkeypatch)
+    monkeypatch.setenv("TESTPROV_API_KEY", "  keywith-whitespace\n")
+    validate = MagicMock(side_effect=AssertionError("must not be called"))
+
+    result = get_api_key(_provider(validate))
+
+    assert result == "keywith-whitespace"
+    validate.assert_not_called()
+
+
 def test_valid_stored_key_used_silently(tmp_path, monkeypatch, capsys):
     _isolate_key_file(tmp_path, monkeypatch)
     monkeypatch.delenv("TESTPROV_API_KEY", raising=False)

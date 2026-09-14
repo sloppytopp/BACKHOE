@@ -2,10 +2,10 @@ from unittest.mock import patch
 
 from click.testing import CliRunner
 
-from backhoe.backends.censys import CensysAPIError
+from backhoe.backends.censys import CENSYS_PROVIDER, CensysAPIError
 from backhoe.backends.dns_checks import DnsCheckError
 from backhoe.backends.gravatar import GravatarError
-from backhoe.backends.shodan import ShodanAPIError
+from backhoe.backends.shodan import SHODAN_PROVIDER, ShodanAPIError
 from backhoe.backends.spiderfoot import SpiderFootError, SpiderFootNotInstalled
 from backhoe.backends.theharvester import TheHarvesterError, TheHarvesterNotInstalled
 from backhoe.cli import cli
@@ -226,7 +226,7 @@ def test_infra_check_skips_shodan_silently_when_no_key_available():
         result = runner.invoke(cli, ["infra-check", "example.com", "--no-censys"])
 
     assert result.exit_code == 0
-    get_key_mock.assert_called_once()
+    get_key_mock.assert_called_once_with(SHODAN_PROVIDER)
     lookup_mock.assert_not_called()
 
 
@@ -312,7 +312,7 @@ def test_infra_check_skips_censys_silently_when_no_key_available():
         result = runner.invoke(cli, ["infra-check", "example.com", "--no-shodan"])
 
     assert result.exit_code == 0
-    get_key_mock.assert_called_once()
+    get_key_mock.assert_called_once_with(CENSYS_PROVIDER)
     lookup_mock.assert_not_called()
 
 
