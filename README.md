@@ -3,23 +3,69 @@
 # BACKHOE
 
 [![tests](https://github.com/sloppytopp/BACKHOE/actions/workflows/tests.yml/badge.svg)](https://github.com/sloppytopp/BACKHOE/actions/workflows/tests.yml)
-[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![license](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 
-OSINT recon that gives you an answer, not a data dump.
+**OSINT recon that gives you an answer, not a data dump.**
 
 Every other OSINT tool hands you raw findings and expects you to
-figure out what matters. BACKHOE normalizes output across backend
-tools, scores findings by relevance, and renders a report that reads
-like a summary — not a table you have to reverse-engineer.
+already know what matters. BACKHOE scores every finding by actual
+relevance and tells you the one thing worth reading, in one command,
+against a target you already have in mind — no wiring six tools
+together, no reading the source to figure out what the flags do.
 
-**Only run BACKHOE against domains, addresses, and infrastructure you
-own or are explicitly authorized to test.** `infra-check` performs
-active TCP connections (a bounded port scan); treat it like any other
-recon tool and get authorization first.
+## See it work — 30 seconds, no signup, no API key
+
+```bash
+pip install backhoe-osint
+backhoe person-check admin@yellowhammertrader.com
+```
+
+```
+Running person-check against admin@yellowhammertrader.com...
+
+╭───────────────────────────── BACKHOE — admin@yellowhammertrader.com ─────────────────────────────╮
+│ SPF is present, but DMARC policy is p=none — spoofed mail from this domain is monitored, not     │
+│ blocked.                                                                                         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+┏━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Interest ┃ Type         ┃ Value                    ┃  Live  ┃ Source   ┃ Note                    ┃
+┡━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ MED      │ dns_record   │ yellowhammertrader.com   │   -    │ dns      │ DMARC policy is p=none  │
+│          │              │                          │        │          │ — spoofed mail is       │
+│          │              │                          │        │          │ monitored but not       │
+│          │              │                          │        │          │ blocked                 │
+│ low      │ email        │ admin@yellowhammertrade… │   -    │ gravatar │ no public Gravatar      │
+│          │              │                          │        │          │ profile                 │
+└──────────┴──────────────┴──────────────────────────┴────────┴──────────┴─────────────────────────┘
+```
+
+That's real, live output from a real domain — not a mockup. One command,
+zero API keys, and the tool tells you the *actual* finding (this domain's
+mail can be spoofed and only gets monitored, not blocked) instead of
+handing you an MX record and leaving you to know why that matters.
+
+```bash
+backhoe domain-audit some-domain-you-care-about.com
+```
+is the same deal for subdomain recon — certificate-transparency-log
+enumeration, scored by name and freshness, zero keys required.
+
+**`infra-check` does active TCP connections (a bounded port scan) —
+only run it against domains, addresses, and infrastructure you own or
+are explicitly authorized to test.** `person-check` and `domain-audit`
+are fully passive (DNS/HTTP lookups anyone can already make) and don't
+carry that restriction.
 
 ## Install
 
 ```bash
+pip install backhoe-osint
+```
+
+Or from source:
+```bash
+git clone https://github.com/sloppytopp/BACKHOE.git
+cd BACKHOE
 python3 -m venv venv
 source venv/bin/activate
 pip install -e .
@@ -64,7 +110,7 @@ Every network call is mocked, so the full suite runs offline. (DNS
 resolution tests are the one exception — they hit real DNS, resolving
 `localhost` and a guaranteed-bogus `.invalid` hostname.)
 
-## What it does right now (v0.4)
+## What it does right now (v0.5)
 
 **domain-audit**
 - Pulls every subdomain seen in certificate transparency logs (crt.sh,
@@ -201,3 +247,15 @@ handled defensively rather than confirmed live.
   (the interactive per-backend key prompt already exists — see
   "Optional: Shodan enrichment" above — this would be a single
   upfront command covering all keyed backends at once)
+
+## License
+
+BACKHOE is licensed under the [GNU Affero General Public License
+v3.0](LICENSE) (AGPL-3.0). In practical terms: you're free to use,
+modify, and self-host it, but if you run a modified version as a
+network service (a hosted/SaaS product), you have to make that
+modified source available too.
+
+Want to use BACKHOE in a commercial product without those AGPL
+obligations? A commercial license is available — open an issue or
+reach out to discuss terms.

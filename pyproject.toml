@@ -1,12 +1,12 @@
 [project]
-name = "backhoe"
-version = "0.4.0"
+name = "backhoe-osint"
+version = "0.5.0"
 description = "OSINT recon that gives you an answer, not a data dump."
 readme = "README.md"
-license = { text = "MIT" }
+license = { text = "AGPL-3.0-or-later" }
 requires-python = ">=3.10"
 classifiers = [
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
     "Programming Language :: Python :: 3",
     "Environment :: Console",
     "Topic :: Security",

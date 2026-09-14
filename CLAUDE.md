@@ -92,7 +92,7 @@ fabricated data. Any new feature that does raw TCP/TLS work should
 check this first — DNS-based checks (dns_checks.py) are unaffected and
 don't need it.
 
-## What's shipped (v0.4)
+## What's shipped (v0.5)
 
 - `domain-audit <domain>` — crt.sh subdomain enum, optional theHarvester
   and SpiderFoot enrichment (see below), keyword + cert-recency interest
