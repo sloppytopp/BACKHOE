@@ -54,6 +54,8 @@ backhoe/
                         checkout (not a pip dependency — see "SpiderFoot" below)
     shodan.py               Shodan host-lookup enrichment for infra-check,
                         needs an API key via keys.py — see "Shodan" below
+    censys.py               Censys host-lookup enrichment for infra-check,
+                        mirrors shodan.py's shape — see "Censys" below
 tests/                   pytest, everything network-mocked except the two
                         real-DNS tests in test_resolve.py
 ```
@@ -102,9 +104,9 @@ don't need it.
   the actual business domain independent of this tool's development.
 - `infra-check <target>` — resolve + reverse DNS, bounded 9-port scan,
   TLS cert expiry, with the interception guard above, plus optional
-  Shodan host-lookup enrichment (see below)
+  Shodan and/or Censys host-lookup enrichment (see below)
 
-123 tests, all passing, `pytest` from repo root (`pip install -e ".[dev]"`
+155 tests, all passing, `pytest` from repo root (`pip install -e ".[dev]"`
 first).
 
 ## Three gap fixes (2026-09-11), applied via TDD after independent verification
@@ -316,10 +318,77 @@ theHarvester/SpiderFoot, Shodan needs an API key, which is where
   tier actually populates are unconfirmed — worth a real smoke test the
   first time this runs somewhere with a live Shodan key.
 
+## Censys (v0.5) — second host-lookup backend, mirrors Shodan exactly
+
+`backends/censys.py` is a second keyed enrichment source for
+`infra-check`, alongside Shodan — same idea (richer per-port
+service/product/version/CVE data than the built-in port scan), same
+`requests`-only pattern, registered through the same `keys.py` wizard
+Shodan already uses. Built to mirror `shodan.py`'s shape deliberately:
+
+- **Same `raw` dict field names** on every `OPEN_PORT` `Finding`
+  (`port`, `service`, `product`, `version`, `vulns`) as Shodan's
+  backend — this is what let Censys land with **zero changes to
+  `scoring.py` or `report.py`**: both already handle this shape
+  generically, built for and validated against Shodan's Task 3 fix and
+  final review.
+- **Unlike Shodan, this backend's API shape was verified against
+  Censys's live, current documentation** (`docs.censys.com`) during
+  development, not from training-data memory alone — and that caught a
+  real, concrete thing memory would have missed: Censys deprecated
+  their old Basic-Auth (API-ID + secret) v2 Search API in favor of a
+  newer Bearer-token "Platform API" (v3), which their own docs say all
+  new scripted access should use. `censys.py` targets the new one
+  exclusively.
+- Auth is `Authorization: Bearer <token>` — a single Personal Access
+  Token, fitting `keys.py`'s one-key `KeyProvider` model with no
+  changes needed there. Unlike Shodan's query-param auth (which is what
+  let the key leak into a `ConnectionError`'s own message in the Shodan
+  final review), a Bearer header doesn't appear in a `requests`
+  exception's stringified URL — a real security improvement, not just
+  a different flavor of the same risk. `_redact_key()` is still applied
+  defensively anyway, cheap insurance against a future error path or
+  proxy layer embedding a header value.
+- `censys.validate_key()` hits `/v3/accounts/users/credits`, confirmed
+  live in Censys's own docs (quoted twice) to cost no credits — same
+  role as Shodan's `/api-info`, letting `keys.py` re-validate a stored
+  token on every `infra-check` run for free.
+- `censys.lookup_host(ip, key)` hits `/v3/global/asset/host/<ip>`. A
+  404 is treated as an empty result (not confirmed live for this
+  specific endpoint — see the implementation plan's "Verification
+  note" — but matches Shodan's precedent and general REST convention).
+  Any other non-200, a network error, or unparseable JSON raises
+  `CensysAPIError`.
+- The `vulns` field's exact on-the-wire shape also wasn't confirmable
+  from truncated doc content — the clearest signal found says it's a
+  list of `{"id": "CVE-...", ...}` objects, a *different* shape from
+  Shodan's (plain CVE-id strings or a dict keyed by CVE id), so
+  `_extract_vuln_ids()` handles all three shapes rather than assuming
+  the Censys-specific one.
+- Censys can return multiple `services` entries; `_to_findings` groups
+  them by port before building `Finding`s, for the identical reason
+  Shodan's `_to_findings` does — two same-port entries sharing a dedup
+  key and source would otherwise let `merge_findings()` silently let
+  the second overwrite the first's `raw` (the Critical bug Shodan's
+  final review caught and fixed).
+- Wired into `infra-check` via `--censys/--no-censys` (default on),
+  structurally identical to `--shodan/--no-shodan`: runs outside the
+  `netcheck.py` interception guard (passive API call, not raw TCP),
+  `CensysAPIError` caught non-fatally (yellow warning), a missing key
+  skips silently. Both Shodan and Censys can run in the same
+  `infra-check` call and merge on a shared `ip:port` — proven by a
+  three-way integration test (portscan + Shodan + Censys all reporting
+  the same port).
+- **Not run against a live Censys account in this environment** — no
+  Censys API key or account was available during development. Live
+  documentation confirms the auth model, endpoints, and the free-to-call
+  claim for the credits endpoint, but the exact host-lookup response
+  shape (particularly `vulns`) and 404 behavior are handled defensively
+  rather than confirmed. Worth a real smoke test the first time this
+  runs somewhere with a live Censys Personal Access Token.
+
 ## What's NOT built yet (don't claim otherwise)
 
-- Censys backend (Shodan is now built — see above; Censys would be a
-  similar richer-port-data source, still not built)
 - HaveIBeenPwned breach-hit backend (needs an API key — HIBP's
   by-email lookup hasn't been free/keyless since 2019)
 - WHOIS-based domain age — note: WHOIS uses TCP port 43, which the

@@ -45,12 +45,13 @@ target-type dropdown.
   (MX/SPF/DMARC) plus a Gravatar existence check for the address.
 - `infra-check` — resolves the target, reverse-DNS on each IP, a
   bounded common-port scan, the live TLS certificate's expiry, and (if
-  a Shodan API key is available) Shodan host-lookup enrichment with
+  keys are available) Shodan and/or Censys host-lookup enrichment with
   service/product/version and known-CVE data. Pass `--no-ports` to
-  skip the port scan, `--no-shodan` to skip Shodan. With `--shodan`
-  (the default) and no `SHODAN_API_KEY` env var or stored key yet,
-  `infra-check` prompts for one interactively on first run — see
-  "Optional: Shodan enrichment" below.
+  skip the port scan, `--no-shodan`/`--no-censys` to skip either
+  enrichment source. With both on by default and no `SHODAN_API_KEY`/
+  `CENSYS_API_KEY` env var or stored key yet, `infra-check` prompts for
+  each interactively on first run — see "Optional: Shodan enrichment"
+  and "Optional: Censys enrichment" below.
 
 ## Test
 
@@ -98,11 +99,13 @@ resolution tests are the one exception — they hit real DNS, resolving
   high-interest if exposed
 - Live TLS certificate expiry — flags an expired or soon-to-expire
   cert as high/medium-interest
-- (Optional) Shodan host-lookup enrichment for open ports — service,
-  product/version, and known CVEs, when available — if you provide a
-  free Shodan API key. Runs independently of the interception check
-  below since it's a passive third-party API call, not raw TCP from
-  this host. See "Optional: Shodan enrichment" below.
+- (Optional) Shodan and/or Censys host-lookup enrichment for open
+  ports — service, product/version, and known CVEs, when available —
+  if you provide a free API key for either or both. Findings from
+  multiple sources on the same port merge into one row. Both run
+  independently of the interception check below since they're passive
+  third-party API calls, not raw TCP from this host. See "Optional:
+  Shodan enrichment" and "Optional: Censys enrichment" below.
 - **Detects transparent network interception before trusting any of
   the above.** Corporate proxies, security sandboxes, and some VPNs
   transparently intercept all outbound TCP/TLS traffic and answer on
@@ -165,10 +168,32 @@ fetch don't.
 tested against mocked HTTP responses only — not yet run against a live
 Shodan account end-to-end in this environment.
 
+## Optional: Censys enrichment
+
+`infra-check` also enriches open-port findings with
+[Censys](https://censys.io/) host-lookup data (service, product/
+version, and known CVEs) if you provide a Censys Personal Access
+Token — same idea as Shodan enrichment above, and the two can run
+together in the same scan.
+
+Resolution order: a `CENSYS_API_KEY` environment variable, then a key
+already stored at `~/.config/backhoe/keys.json`, then an interactive
+prompt on first run (hidden input) — leave it blank to skip. Skip
+Censys entirely with `--no-censys`.
+
+Runs even on a network `infra-check` detects as intercepting TCP/TLS —
+it's a passive API call, not raw TCP from this host.
+
+**Verification note:** unlike Shodan, this backend's API shape was
+checked against Censys's live current documentation during
+development — including catching that Censys's older API (Basic Auth,
+API ID + secret) is deprecated in favor of the newer Bearer-token
+Platform API this backend uses. Still not run against a live Censys
+account end-to-end, though — the exact host-lookup response shape is
+handled defensively rather than confirmed live.
+
 ## What's coming next
 
-- Censys backend for richer port/service data (an alternative to, or
-  complement of, Shodan)
 - HaveIBeenPwned backend for breach hits (needs an API key)
 - WHOIS-based domain age lookup
 - A standalone setup wizard that tests each configured API key live
