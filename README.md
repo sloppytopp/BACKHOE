@@ -1,4 +1,4 @@
-<img src="assets/favicon.png" alt="BACKHOE" width="96" height="96">
+<img src="assets/favicon.png" alt="BACKHOE" width="300" height="300">
 
 # BACKHOE
 
