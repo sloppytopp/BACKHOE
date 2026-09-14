@@ -14,7 +14,8 @@ import sys
 import click
 
 from . import keys
-from .backends import crtsh, dns_checks, netcheck, portscan, shodan, spiderfoot, theharvester, tls
+from .backends import censys, crtsh, dns_checks, netcheck, portscan, shodan, spiderfoot, theharvester, tls
+from .backends.censys import CENSYS_PROVIDER, CensysAPIError
 from .backends.crtsh import CrtShError
 from .backends.dns_checks import DnsCheckError
 from .backends.gravatar import GravatarError, check_gravatar
@@ -189,12 +190,25 @@ def person_check(email: str):
         "SHODAN_API_KEY the first time if none is set or stored."
     ),
 )
-def infra_check(target: str, ports: bool, shodan_: bool):
+@click.option(
+    "--censys/--no-censys",
+    "censys_",  # avoid shadowing the imported `censys` module below
+    default=True,
+    help=(
+        "Enrich open-port findings with Censys host-lookup data (service, "
+        "product/version, known CVEs) if an API key is available (default: "
+        "on). Runs even when this network intercepts TCP/TLS, since it's a "
+        "passive API lookup, not raw TCP from this host. Prompts for a "
+        "CENSYS_API_KEY (a Censys Personal Access Token) the first time if "
+        "none is set or stored."
+    ),
+)
+def infra_check(target: str, ports: bool, shodan_: bool, censys_: bool):
     """
     Run an infrastructure recon profile against a domain or IP: resolved
     IPs + reverse DNS, a bounded common-port scan, the live TLS
-    certificate's expiry, and (if a key is available) Shodan host-lookup
-    enrichment.
+    certificate's expiry, and (if a key is available) Shodan and/or
+    Censys host-lookup enrichment.
     """
     click.echo(f"Running infra-check against {target}...\n")
 
@@ -274,6 +288,19 @@ def infra_check(target: str, ports: bool, shodan_: bool):
                     findings.extend(shodan.lookup_host(ip, key))
                 except ShodanAPIError as exc:
                     click.secho(f"Shodan lookup skipped for {ip}: {exc}", fg="yellow", err=True)
+
+    if censys_:
+        # Same rationale as the Shodan block above: a passive API lookup,
+        # not raw TCP from this host, so it runs regardless of network
+        # interception status.
+        key = keys.get_api_key(CENSYS_PROVIDER)
+        if key:
+            click.echo("Enriching with Censys host-lookup data...\n")
+            for ip in ips:
+                try:
+                    findings.extend(censys.lookup_host(ip, key))
+                except CensysAPIError as exc:
+                    click.secho(f"Censys lookup skipped for {ip}: {exc}", fg="yellow", err=True)
 
     findings = merge_findings(findings)
     findings = score_all(findings)

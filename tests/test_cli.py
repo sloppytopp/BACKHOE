@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 from click.testing import CliRunner
 
+from backhoe.backends.censys import CensysAPIError
 from backhoe.backends.dns_checks import DnsCheckError
 from backhoe.backends.gravatar import GravatarError
 from backhoe.backends.shodan import ShodanAPIError
@@ -142,7 +143,7 @@ def test_infra_check_accepts_a_bare_ip():
     with patch("backhoe.cli.dns_checks.reverse_dns", return_value=None), patch(
         "backhoe.cli.netcheck.tcp_tls_is_intercepted", return_value=True
     ):
-        result = runner.invoke(cli, ["infra-check", "1.2.3.4", "--no-shodan"])
+        result = runner.invoke(cli, ["infra-check", "1.2.3.4", "--no-shodan", "--no-censys"])
     assert result.exit_code == 0
     assert "1.2.3.4" in result.output
 
@@ -156,7 +157,7 @@ def test_infra_check_skips_ports_and_tls_when_intercepted():
     ) as scan_mock, patch(
         "backhoe.cli.tls.get_certificate_info"
     ) as tls_mock:
-        result = runner.invoke(cli, ["infra-check", "example.com", "--no-shodan"])
+        result = runner.invoke(cli, ["infra-check", "example.com", "--no-shodan", "--no-censys"])
 
     assert result.exit_code == 0
     assert "transparently intercepts" in result.output
@@ -173,7 +174,7 @@ def test_infra_check_scans_every_resolved_ip_not_the_original_hostname():
     ) as scan_mock, patch(
         "backhoe.cli.tls.get_certificate_info", return_value={"days_until_expiry": 60, "issuer": {}, "subject": {}, "san": []}
     ):
-        result = runner.invoke(cli, ["infra-check", "cdn.example.com", "--no-shodan"])
+        result = runner.invoke(cli, ["infra-check", "cdn.example.com", "--no-shodan", "--no-censys"])
 
     assert result.exit_code == 0
     scan_mock.assert_any_call("1.2.3.4")
@@ -190,7 +191,7 @@ def test_infra_check_tags_open_port_findings_with_the_ip_not_the_hostname():
     ), patch(
         "backhoe.cli.tls.get_certificate_info", return_value={"days_until_expiry": 60, "issuer": {}, "subject": {}, "san": []}
     ):
-        result = runner.invoke(cli, ["infra-check", "cdn.example.com", "--no-shodan"])
+        result = runner.invoke(cli, ["infra-check", "cdn.example.com", "--no-shodan", "--no-censys"])
 
     assert result.exit_code == 0
     assert "1.2.3.4:443" in result.output
@@ -206,7 +207,7 @@ def test_infra_check_runs_ports_and_tls_when_not_intercepted():
         "backhoe.cli.tls.get_certificate_info",
         return_value={"days_until_expiry": 60, "issuer": {}, "subject": {}, "san": []},
     ):
-        result = runner.invoke(cli, ["infra-check", "example.com", "--no-shodan"])
+        result = runner.invoke(cli, ["infra-check", "example.com", "--no-shodan", "--no-censys"])
 
     assert result.exit_code == 0
     assert "tls" in result.output
@@ -222,7 +223,7 @@ def test_infra_check_skips_shodan_silently_when_no_key_available():
     ) as get_key_mock, patch(
         "backhoe.cli.shodan.lookup_host"
     ) as lookup_mock:
-        result = runner.invoke(cli, ["infra-check", "example.com"])
+        result = runner.invoke(cli, ["infra-check", "example.com", "--no-censys"])
 
     assert result.exit_code == 0
     get_key_mock.assert_called_once()
@@ -236,7 +237,7 @@ def test_infra_check_skips_shodan_with_no_shodan_flag():
     ), patch("backhoe.cli.netcheck.tcp_tls_is_intercepted", return_value=True), patch(
         "backhoe.cli.keys.get_api_key"
     ) as get_key_mock:
-        result = runner.invoke(cli, ["infra-check", "example.com", "--no-shodan"])
+        result = runner.invoke(cli, ["infra-check", "example.com", "--no-shodan", "--no-censys"])
 
     assert result.exit_code == 0
     get_key_mock.assert_not_called()
@@ -256,7 +257,7 @@ def test_infra_check_runs_shodan_even_when_intercepted():
     ), patch("backhoe.cli.netcheck.tcp_tls_is_intercepted", return_value=True), patch(
         "backhoe.cli.keys.get_api_key", return_value="a-key"
     ), patch("backhoe.cli.shodan.lookup_host", return_value=[shodan_finding]):
-        result = runner.invoke(cli, ["infra-check", "example.com"])
+        result = runner.invoke(cli, ["infra-check", "example.com", "--no-censys"])
 
     assert result.exit_code == 0
     assert "1.2.3.4:80" in result.output
@@ -269,7 +270,7 @@ def test_infra_check_warns_and_continues_on_shodan_api_error():
     ), patch("backhoe.cli.netcheck.tcp_tls_is_intercepted", return_value=True), patch(
         "backhoe.cli.keys.get_api_key", return_value="a-key"
     ), patch("backhoe.cli.shodan.lookup_host", side_effect=ShodanAPIError("rate limited")):
-        result = runner.invoke(cli, ["infra-check", "example.com"])
+        result = runner.invoke(cli, ["infra-check", "example.com", "--no-censys"])
 
     assert result.exit_code == 0
     assert "rate limited" in result.output
@@ -291,9 +292,125 @@ def test_infra_check_merges_shodan_and_portscan_open_port_on_same_ip_port():
     ), patch("backhoe.cli.keys.get_api_key", return_value="a-key"), patch(
         "backhoe.cli.shodan.lookup_host", return_value=[shodan_finding]
     ):
+        result = runner.invoke(cli, ["infra-check", "cdn.example.com", "--no-censys"])
+
+    assert result.exit_code == 0
+    assert result.output.count("1.2.3.4:443") == 1
+    assert "portscan" in result.output
+    assert "shodan" in result.output
+
+
+def test_infra_check_skips_censys_silently_when_no_key_available():
+    runner = CliRunner()
+    with patch("backhoe.cli.dns_checks.resolve_a_records", return_value=["1.2.3.4"]), patch(
+        "backhoe.cli.dns_checks.reverse_dns", return_value=None
+    ), patch("backhoe.cli.netcheck.tcp_tls_is_intercepted", return_value=True), patch(
+        "backhoe.cli.keys.get_api_key", return_value=None
+    ) as get_key_mock, patch(
+        "backhoe.cli.censys.lookup_host"
+    ) as lookup_mock:
+        result = runner.invoke(cli, ["infra-check", "example.com", "--no-shodan"])
+
+    assert result.exit_code == 0
+    get_key_mock.assert_called_once()
+    lookup_mock.assert_not_called()
+
+
+def test_infra_check_skips_censys_with_no_censys_flag():
+    runner = CliRunner()
+    with patch("backhoe.cli.dns_checks.resolve_a_records", return_value=["1.2.3.4"]), patch(
+        "backhoe.cli.dns_checks.reverse_dns", return_value=None
+    ), patch("backhoe.cli.netcheck.tcp_tls_is_intercepted", return_value=True), patch(
+        "backhoe.cli.keys.get_api_key"
+    ) as get_key_mock:
+        result = runner.invoke(cli, ["infra-check", "example.com", "--no-shodan", "--no-censys"])
+
+    assert result.exit_code == 0
+    get_key_mock.assert_not_called()
+
+
+def test_infra_check_runs_censys_even_when_intercepted():
+    runner = CliRunner()
+    censys_finding = Finding(
+        type=FindingType.OPEN_PORT, value="1.2.3.4:80", source="censys",
+        raw={"port": 80, "service": "HTTP", "product": None, "version": None, "vulns": []},
+    )
+    with patch("backhoe.cli.dns_checks.resolve_a_records", return_value=["1.2.3.4"]), patch(
+        "backhoe.cli.dns_checks.reverse_dns", return_value=None
+    ), patch("backhoe.cli.netcheck.tcp_tls_is_intercepted", return_value=True), patch(
+        "backhoe.cli.keys.get_api_key", return_value="a-key"
+    ), patch("backhoe.cli.censys.lookup_host", return_value=[censys_finding]):
+        result = runner.invoke(cli, ["infra-check", "example.com", "--no-shodan"])
+
+    assert result.exit_code == 0
+    assert "1.2.3.4:80" in result.output
+
+
+def test_infra_check_warns_and_continues_on_censys_api_error():
+    runner = CliRunner()
+    with patch("backhoe.cli.dns_checks.resolve_a_records", return_value=["1.2.3.4"]), patch(
+        "backhoe.cli.dns_checks.reverse_dns", return_value=None
+    ), patch("backhoe.cli.netcheck.tcp_tls_is_intercepted", return_value=True), patch(
+        "backhoe.cli.keys.get_api_key", return_value="a-key"
+    ), patch("backhoe.cli.censys.lookup_host", side_effect=CensysAPIError("rate limited")):
+        result = runner.invoke(cli, ["infra-check", "example.com", "--no-shodan"])
+
+    assert result.exit_code == 0
+    assert "rate limited" in result.output
+
+
+def test_infra_check_merges_censys_and_portscan_open_port_on_same_ip_port():
+    runner = CliRunner()
+    censys_finding = Finding(
+        type=FindingType.OPEN_PORT, value="1.2.3.4:443", source="censys",
+        raw={"port": 443, "service": "HTTPS", "product": "nginx", "version": "1.18", "vulns": []},
+    )
+    with patch("backhoe.cli.dns_checks.resolve_a_records", return_value=["1.2.3.4"]), patch(
+        "backhoe.cli.dns_checks.reverse_dns", return_value=None
+    ), patch("backhoe.cli.netcheck.tcp_tls_is_intercepted", return_value=False), patch(
+        "backhoe.cli.portscan.scan_ports", return_value={443: True}
+    ), patch(
+        "backhoe.cli.tls.get_certificate_info",
+        return_value={"days_until_expiry": 60, "issuer": {}, "subject": {}, "san": []},
+    ), patch("backhoe.cli.keys.get_api_key", return_value="a-key"), patch(
+        "backhoe.cli.censys.lookup_host", return_value=[censys_finding]
+    ):
+        result = runner.invoke(cli, ["infra-check", "cdn.example.com", "--no-shodan"])
+
+    assert result.exit_code == 0
+    assert result.output.count("1.2.3.4:443") == 1
+    assert "portscan" in result.output
+    assert "censys" in result.output
+
+
+def test_infra_check_merges_shodan_and_censys_and_portscan_on_same_ip_port():
+    # The real point of running two keyed backends: prove all three sources
+    # compose into one row instead of three, and the CVE from whichever
+    # source has one still surfaces.
+    runner = CliRunner()
+    shodan_finding = Finding(
+        type=FindingType.OPEN_PORT, value="1.2.3.4:443", source="shodan",
+        raw={"port": 443, "service": "https", "product": "nginx", "version": "1.18", "vulns": []},
+    )
+    censys_finding = Finding(
+        type=FindingType.OPEN_PORT, value="1.2.3.4:443", source="censys",
+        raw={"port": 443, "service": "HTTPS", "product": None, "version": None, "vulns": ["CVE-2022-9999"]},
+    )
+    with patch("backhoe.cli.dns_checks.resolve_a_records", return_value=["1.2.3.4"]), patch(
+        "backhoe.cli.dns_checks.reverse_dns", return_value=None
+    ), patch("backhoe.cli.netcheck.tcp_tls_is_intercepted", return_value=False), patch(
+        "backhoe.cli.portscan.scan_ports", return_value={443: True}
+    ), patch(
+        "backhoe.cli.tls.get_certificate_info",
+        return_value={"days_until_expiry": 60, "issuer": {}, "subject": {}, "san": []},
+    ), patch("backhoe.cli.keys.get_api_key", return_value="a-key"), patch(
+        "backhoe.cli.shodan.lookup_host", return_value=[shodan_finding]
+    ), patch("backhoe.cli.censys.lookup_host", return_value=[censys_finding]):
         result = runner.invoke(cli, ["infra-check", "cdn.example.com"])
 
     assert result.exit_code == 0
     assert result.output.count("1.2.3.4:443") == 1
     assert "portscan" in result.output
     assert "shodan" in result.output
+    assert "censys" in result.output
+    assert "CVE-2022-9999" in result.output
