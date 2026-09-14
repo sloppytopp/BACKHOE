@@ -383,10 +383,15 @@ def test_infra_check_merges_censys_and_portscan_open_port_on_same_ip_port():
     assert "censys" in result.output
 
 
-def test_infra_check_merges_shodan_and_censys_and_portscan_on_same_ip_port():
+def test_infra_check_merges_shodan_and_censys_and_portscan_on_same_ip_port(monkeypatch):
     # The real point of running two keyed backends: prove all three sources
     # compose into one row instead of three, and the CVE from whichever
-    # source has one still surfaces.
+    # source has one still surfaces. Force a wide terminal so Rich's table
+    # doesn't truncate the Note column's CVE text — this test's 3-way merge
+    # produces a wider Source column ("portscan, shodan, censys") than any
+    # prior test, and without a real tty/COLUMNS set, Rich defaults to an
+    # 80-column render that truncates "CVE-2022-9999" to "CVE-2022-99…".
+    monkeypatch.setenv("COLUMNS", "200")
     runner = CliRunner()
     shodan_finding = Finding(
         type=FindingType.OPEN_PORT, value="1.2.3.4:443", source="shodan",
