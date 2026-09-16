@@ -113,7 +113,7 @@ Every network call is mocked, so the full suite runs offline. (DNS
 resolution tests are the one exception — they hit real DNS, resolving
 `localhost` and a guaranteed-bogus `.invalid` hostname.)
 
-## What it does right now (v0.5)
+## What it does right now (v0.6)
 
 **domain-audit**
 - Pulls every subdomain seen in certificate transparency logs (crt.sh,
