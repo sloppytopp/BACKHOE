@@ -168,3 +168,97 @@ def test_ip_address_ptr_read_survives_merge_reshape():
     f.merged_raw = True
     score_finding(f)
     assert "no reverse DNS" not in f.note
+
+
+def test_breach_hit_verified_password_breach_scores_highest():
+    f = Finding(
+        type=FindingType.BREACH_HIT, value="Adobe", source="hibp",
+        raw={
+            "breach_date": "2013-10-04",
+            "data_classes": ["Email addresses", "Passwords"],
+            "is_verified": True, "is_fabricated": False, "is_spam_list": False,
+        },
+    )
+    score_finding(f)
+    assert f.confidence == 0.85
+    assert f.interest == 1.0
+    assert "2013 breach" in f.note
+    assert "Email addresses" in f.note
+    assert "Passwords" in f.note
+
+
+def test_breach_hit_fabricated_scores_low_confidence():
+    f = Finding(
+        type=FindingType.BREACH_HIT, value="FakeCo", source="hibp",
+        raw={"breach_date": "2020-01-01", "data_classes": ["Email addresses"], "is_fabricated": True},
+    )
+    score_finding(f)
+    assert f.confidence == 0.3
+    assert "fabricated" in f.note
+
+
+def test_breach_hit_unverified_scores_medium_confidence():
+    f = Finding(
+        type=FindingType.BREACH_HIT, value="UnverifiedCo", source="hibp",
+        raw={"breach_date": "2020-01-01", "data_classes": ["Email addresses"], "is_verified": False},
+    )
+    score_finding(f)
+    assert f.confidence == 0.5
+    assert "unverified" in f.note
+
+
+def test_breach_hit_spam_list_scores_lower_interest():
+    f = Finding(
+        type=FindingType.BREACH_HIT, value="SpamCo", source="hibp",
+        raw={
+            "breach_date": "2020-01-01", "data_classes": ["Email addresses"],
+            "is_verified": True, "is_spam_list": True,
+        },
+    )
+    score_finding(f)
+    assert f.interest == 0.5
+    assert "spam list" in f.note
+
+
+def test_breach_hit_without_password_class_scores_baseline_interest():
+    f = Finding(
+        type=FindingType.BREACH_HIT, value="EmailOnlyCo", source="hibp",
+        raw={"breach_date": "2020-01-01", "data_classes": ["Email addresses"], "is_verified": True},
+    )
+    score_finding(f)
+    assert f.interest == 0.9
+
+
+def test_breach_hit_data_classes_truncated_after_four():
+    f = Finding(
+        type=FindingType.BREACH_HIT, value="BigLeakCo", source="hibp",
+        raw={
+            "breach_date": "2020-01-01",
+            "data_classes": ["A", "B", "C", "D", "E"],
+            "is_verified": True,
+        },
+    )
+    score_finding(f)
+    assert "A, B, C, D..." in f.note
+    assert "E" not in f.note.split("...")[0]
+
+
+def test_breach_hit_with_no_data_and_no_flags_falls_back_to_generic_note():
+    f = Finding(type=FindingType.BREACH_HIT, value="BareBreach", source="hibp", raw={})
+    score_finding(f)
+    assert f.confidence == 0.85
+    assert f.interest == 0.9
+    assert f.note == "credential exposure — verify and rotate"
+
+
+def test_breach_hit_partial_passwords_still_counts_as_credential_exposure():
+    f = Finding(
+        type=FindingType.BREACH_HIT, value="PartialPwCo", source="hibp",
+        raw={
+            "breach_date": "2020-01-01",
+            "data_classes": ["Partial passwords"],
+            "is_verified": True,
+        },
+    )
+    score_finding(f)
+    assert f.interest == 1.0

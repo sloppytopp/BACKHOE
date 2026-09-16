@@ -41,9 +41,7 @@ def score_finding(finding: Finding) -> Finding:
     if finding.type == FindingType.SUBDOMAIN:
         _score_subdomain(finding)
     elif finding.type == FindingType.BREACH_HIT:
-        finding.confidence = 0.85
-        finding.interest = 0.9
-        finding.note = finding.note or "credential exposure — verify and rotate"
+        _score_breach_hit(finding)
     elif finding.type == FindingType.OPEN_PORT:
         _score_open_port(finding)
     elif finding.type == FindingType.CERTIFICATE:
@@ -119,6 +117,70 @@ def _score_open_port(finding: Finding) -> None:
     else:
         finding.interest = 0.55
         finding.note = finding.note or f"port {port} open — confirm this is expected"
+
+
+# DataClasses substrings that mean actual credentials were exposed, not
+# just an email address turning up on a list. Substring match (not exact)
+# so "Partial passwords" — one of HIBP's own DataClasses values — still
+# counts, matching the substance of a "Passwords" hit.
+_CREDENTIAL_DATA_CLASS_HINTS = ("password",)
+
+
+def _has_credential_exposure(data_classes: list[str]) -> bool:
+    return any(
+        any(hint in dc.lower() for hint in _CREDENTIAL_DATA_CLASS_HINTS)
+        for dc in data_classes
+    )
+
+
+def _score_breach_hit(finding: Finding) -> None:
+    raw = finding.raw
+    is_fabricated = raw.get("is_fabricated")
+    is_verified = raw.get("is_verified")
+    is_spam_list = raw.get("is_spam_list")
+    data_classes = raw.get("data_classes") or []
+
+    if is_fabricated:
+        finding.confidence = 0.3
+    elif is_verified is False:
+        finding.confidence = 0.5
+    else:
+        finding.confidence = 0.85
+
+    if is_spam_list:
+        finding.interest = 0.5
+    elif _has_credential_exposure(data_classes):
+        finding.interest = 1.0
+    else:
+        finding.interest = 0.9
+
+    if finding.note:
+        return
+
+    caveats = []
+    if is_fabricated:
+        caveats.append("flagged by HIBP as fabricated")
+    elif is_verified is False:
+        caveats.append("unverified, treat with caution")
+    if is_spam_list:
+        caveats.append("flagged as a spam list, not a confirmed breach")
+
+    if not data_classes and not caveats:
+        finding.note = "credential exposure — verify and rotate"
+        return
+
+    breach_date = raw.get("breach_date")
+    year = str(breach_date)[:4] if breach_date else None
+    note = f"{year} breach" if year else "breach"
+
+    if data_classes:
+        shown = ", ".join(data_classes[:4]) + ("..." if len(data_classes) > 4 else "")
+        note += f" — exposed: {shown}"
+
+    if caveats:
+        note += "; " + "; ".join(caveats)
+
+    finding.note = note
 
 
 def _score_certificate(finding: Finding) -> None:
