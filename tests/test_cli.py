@@ -5,6 +5,7 @@ from click.testing import CliRunner
 from backhoe.backends.censys import CENSYS_PROVIDER, CensysAPIError
 from backhoe.backends.dns_checks import DnsCheckError
 from backhoe.backends.gravatar import GravatarError
+from backhoe.backends.hibp import HIBP_PROVIDER, HIBPAPIError
 from backhoe.backends.shodan import SHODAN_PROVIDER, ShodanAPIError
 from backhoe.backends.spiderfoot import SpiderFootError, SpiderFootNotInstalled
 from backhoe.backends.theharvester import TheHarvesterError, TheHarvesterNotInstalled
@@ -21,7 +22,7 @@ def test_person_check_rejects_invalid_email():
 def test_person_check_exits_nonzero_on_dns_failure():
     runner = CliRunner()
     with patch("backhoe.cli.dns_checks.check_mx", side_effect=DnsCheckError("boom")):
-        result = runner.invoke(cli, ["person-check", "user@example.com"])
+        result = runner.invoke(cli, ["person-check", "user@example.com", "--no-hibp"])
     assert result.exit_code != 0
 
 
@@ -32,7 +33,7 @@ def test_person_check_happy_path_continues_without_gravatar():
     ), patch("backhoe.cli.dns_checks.check_dmarc", return_value=(True, "reject")), patch(
         "backhoe.cli.check_gravatar", side_effect=GravatarError("network down")
     ):
-        result = runner.invoke(cli, ["person-check", "user@example.com"])
+        result = runner.invoke(cli, ["person-check", "user@example.com", "--no-hibp"])
     assert result.exit_code == 0
     assert "Gravatar check skipped" in result.output
     assert "example.com" in result.output
@@ -419,3 +420,81 @@ def test_infra_check_merges_shodan_and_censys_and_portscan_on_same_ip_port(monke
     assert "shodan" in result.output
     assert "censys" in result.output
     assert "CVE-2022-9999" in result.output
+
+
+def test_person_check_skips_hibp_silently_when_no_key_available():
+    runner = CliRunner()
+    with patch("backhoe.cli.dns_checks.check_mx", return_value=["mail.example.com"]), patch(
+        "backhoe.cli.dns_checks.check_spf", return_value="v=spf1 ~all"
+    ), patch("backhoe.cli.dns_checks.check_dmarc", return_value=(True, "reject")), patch(
+        "backhoe.cli.check_gravatar", return_value=False
+    ), patch(
+        "backhoe.cli.keys.get_api_key", return_value=None
+    ) as get_key_mock, patch(
+        "backhoe.cli.hibp_backend.check_breaches"
+    ) as check_mock:
+        result = runner.invoke(cli, ["person-check", "user@example.com"])
+
+    assert result.exit_code == 0
+    get_key_mock.assert_called_once_with(HIBP_PROVIDER)
+    check_mock.assert_not_called()
+
+
+def test_person_check_skips_hibp_with_no_hibp_flag():
+    runner = CliRunner()
+    with patch("backhoe.cli.dns_checks.check_mx", return_value=["mail.example.com"]), patch(
+        "backhoe.cli.dns_checks.check_spf", return_value="v=spf1 ~all"
+    ), patch("backhoe.cli.dns_checks.check_dmarc", return_value=(True, "reject")), patch(
+        "backhoe.cli.check_gravatar", return_value=False
+    ), patch(
+        "backhoe.cli.keys.get_api_key"
+    ) as get_key_mock:
+        result = runner.invoke(cli, ["person-check", "user@example.com", "--no-hibp"])
+
+    assert result.exit_code == 0
+    get_key_mock.assert_not_called()
+
+
+def test_person_check_reports_hibp_breach_hit():
+    runner = CliRunner()
+    breach_finding = Finding(
+        type=FindingType.BREACH_HIT, value="Adobe", source="hibp",
+        raw={
+            "name": "Adobe", "title": "Adobe", "domain": "adobe.com",
+            "breach_date": "2013-10-04", "pwn_count": 152445165,
+            "data_classes": ["Email addresses", "Passwords"],
+            "is_verified": True, "is_fabricated": False,
+            "is_sensitive": False, "is_retired": False, "is_spam_list": False,
+        },
+    )
+    with patch("backhoe.cli.dns_checks.check_mx", return_value=["mail.example.com"]), patch(
+        "backhoe.cli.dns_checks.check_spf", return_value="v=spf1 ~all"
+    ), patch("backhoe.cli.dns_checks.check_dmarc", return_value=(True, "reject")), patch(
+        "backhoe.cli.check_gravatar", return_value=False
+    ), patch(
+        "backhoe.cli.keys.get_api_key", return_value="a-key"
+    ), patch(
+        "backhoe.cli.hibp_backend.check_breaches", return_value=[breach_finding]
+    ):
+        result = runner.invoke(cli, ["person-check", "user@example.com"])
+
+    assert result.exit_code == 0
+    assert "Adobe" in result.output
+    assert "hibp" in result.output
+
+
+def test_person_check_warns_and_continues_on_hibp_api_error():
+    runner = CliRunner()
+    with patch("backhoe.cli.dns_checks.check_mx", return_value=["mail.example.com"]), patch(
+        "backhoe.cli.dns_checks.check_spf", return_value="v=spf1 ~all"
+    ), patch("backhoe.cli.dns_checks.check_dmarc", return_value=(True, "reject")), patch(
+        "backhoe.cli.check_gravatar", return_value=False
+    ), patch(
+        "backhoe.cli.keys.get_api_key", return_value="a-key"
+    ), patch(
+        "backhoe.cli.hibp_backend.check_breaches", side_effect=HIBPAPIError("rate limited")
+    ):
+        result = runner.invoke(cli, ["person-check", "user@example.com"])
+
+    assert result.exit_code == 0
+    assert "rate limited" in result.output

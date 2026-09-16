@@ -98,7 +98,8 @@ don't need it.
   and SpiderFoot enrichment (see below), keyword + cert-recency interest
   scoring, live DNS liveness check (`--no-resolve` to skip)
 - `person-check <email>` — MX/SPF/DMARC for the domain, Gravatar check
-  for the address. Verified live against yellowhammertrader.com during
+  for the address, plus optional HaveIBeenPwned breach-hit checking (see
+  below). Verified live against yellowhammertrader.com during
   development: found DMARC is present but `p=none` (monitor-only, not
   enforcing) — a real, actionable finding, worth following up on for
   the actual business domain independent of this tool's development.
@@ -106,7 +107,7 @@ don't need it.
   TLS cert expiry, with the interception guard above, plus optional
   Shodan and/or Censys host-lookup enrichment (see below)
 
-155 tests, all passing, `pytest` from repo root (`pip install -e ".[dev]"`
+195 tests, all passing, `pytest` from repo root (`pip install -e ".[dev]"`
 first).
 
 ## Three gap fixes (2026-09-11), applied via TDD after independent verification
@@ -387,10 +388,61 @@ Shodan already uses. Built to mirror `shodan.py`'s shape deliberately:
   rather than confirmed. Worth a real smoke test the first time this
   runs somewhere with a live Censys Personal Access Token.
 
+## HIBP (v0.5) — breach-hit backend for person-check, format-only key validation
+
+`backends/hibp.py` is `person-check`'s first real `BREACH_HIT` producer —
+`FindingType.BREACH_HIT` existed and was scored since v0.2, but nothing
+populated it until now. Same `requests`-only, no-SDK pattern as
+Shodan/Censys, registered through the same `keys.py` wizard, but with a
+real structural difference confirmed against HIBP's own current API v3
+docs (`haveibeenpwned.com/API/v3`) during design — not assumed from
+memory:
+
+- **HIBP has no free key-validation endpoint at all**, unlike Shodan's
+  `/api-info` or Censys's `/accounts/users/credits` — every real call to
+  `breachedaccount` counts against the subscription's rate limit.
+  `validate_key()` is therefore a **format-only check** (a 32-character
+  hex string, HIBP's documented key shape) with **no network call** —
+  it never raises, so there's deliberately no `HIBPValidationError` or
+  `KeyValidationError` subclass here, unlike Shodan/Censys. An actually-
+  wrong key surfaces at lookup time as a normal `HIBPAPIError` (401),
+  caught the same non-fatal way as any other backend error.
+- `check_breaches(email, key)` hits
+  `GET /breachedaccount/{email}?truncateResponse=false` — the
+  `truncateResponse=false` param is required; the default truncated
+  response omits every field scoring needs (`DataClasses`, `IsVerified`,
+  etc.). Requires a `hibp-api-key` header AND a non-empty `User-Agent` —
+  **missing `User-Agent` returns 403**, a failure mode neither Shodan
+  nor Censys has (neither sends any custom headers at all).
+- A 404 (no breaches for this email) is a legitimate empty result, not
+  an error, matching the project's existing convention. `429` (rate
+  limited) raises `HIBPAPIError` with the `Retry-After` header value
+  folded into the message when present.
+- `scoring._score_breach_hit` was upgraded in the same pass from a
+  hardcoded `confidence=0.85/interest=0.9/static-note` (written before
+  any real breach backend existed) to logic driven by HIBP's actual
+  `DataClasses`/`IsVerified`/`IsFabricated`/`IsSpamList` fields: a
+  fabricated breach drops confidence to 0.3, unverified to 0.5; a
+  breach exposing passwords (or "Partial passwords") scores the highest
+  interest, a spam-list hit the lowest. The note is built from the real
+  breach year and exposed data classes instead of a fixed string,
+  mirroring the CVE-boost pattern `_score_open_port` already uses for
+  Shodan/Censys.
+- Wired into `person-check` via `--hibp/--no-hibp` (default on). A
+  missing key skips silently (same tier as Shodan/Censys with no key);
+  `HIBPAPIError` is caught non-fatally (yellow warning, same tier as a
+  Gravatar failure).
+- No changes needed to `keys.py` or `report.py` — both already handle a
+  new `KeyProvider` / `FindingType.BREACH_HIT` generically.
+- **Not run against a live HIBP account in this environment** — no HIBP
+  API key was available during development (HIBP's API has required a
+  paid subscription since 2019). Built from HIBP's published API docs
+  and tested entirely against mocked HTTP responses, same verification
+  tier Shodan's backend carries. Worth a real smoke test the first time
+  this runs somewhere with a live HIBP key.
+
 ## What's NOT built yet (don't claim otherwise)
 
-- HaveIBeenPwned breach-hit backend (needs an API key — HIBP's
-  by-email lookup hasn't been free/keyless since 2019)
 - WHOIS-based domain age — note: WHOIS uses TCP port 43, which the
   sandboxed dev environment blocked outright (not even a TCP handshake
   succeeded, unlike 80/443's fake-success interception). Should work

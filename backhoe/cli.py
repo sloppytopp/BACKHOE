@@ -14,11 +14,12 @@ import sys
 import click
 
 from . import keys
-from .backends import censys, crtsh, dns_checks, netcheck, portscan, shodan, spiderfoot, theharvester, tls
+from .backends import censys, crtsh, dns_checks, hibp as hibp_backend, netcheck, portscan, shodan, spiderfoot, theharvester, tls
 from .backends.censys import CENSYS_PROVIDER, CensysAPIError
 from .backends.crtsh import CrtShError
 from .backends.dns_checks import DnsCheckError
 from .backends.gravatar import GravatarError, check_gravatar
+from .backends.hibp import HIBP_PROVIDER, HIBPAPIError
 from .backends.shodan import SHODAN_PROVIDER, ShodanAPIError
 from .backends.spiderfoot import SpiderFootError, SpiderFootNotInstalled
 from .backends.theharvester import TheHarvesterError, TheHarvesterNotInstalled
@@ -110,10 +111,20 @@ def domain_audit(domain: str, resolve: bool, harvester: bool, spiderfoot_: bool)
 
 @cli.command("person-check")
 @click.argument("email")
-def person_check(email: str):
+@click.option(
+    "--hibp/--no-hibp",
+    default=True,
+    help=(
+        "Check the address against HaveIBeenPwned's breach database if "
+        "an API key is available (default: on). Prompts for an "
+        "HIBP_API_KEY the first time if none is set or stored."
+    ),
+)
+def person_check(email: str, hibp: bool):
     """
     Run an email recon profile: mail security posture (MX/SPF/DMARC) for
-    the domain, plus a Gravatar existence check for the address itself.
+    the domain, a Gravatar existence check for the address itself, and
+    (if a key is available) a HaveIBeenPwned breach-hit check.
     """
     email = email.strip()
     if not EMAIL_RE.match(email):
@@ -166,6 +177,15 @@ def person_check(email: str):
         )
     except GravatarError as exc:
         click.secho(f"Gravatar check skipped: {exc}", fg="yellow", err=True)
+
+    if hibp:
+        key = keys.get_api_key(HIBP_PROVIDER)
+        if key:
+            click.echo("Checking HaveIBeenPwned for breach hits...\n")
+            try:
+                findings.extend(hibp_backend.check_breaches(email, key))
+            except HIBPAPIError as exc:
+                click.secho(f"HIBP check skipped: {exc}", fg="yellow", err=True)
 
     findings = score_all(findings)
     render_report(email, findings)

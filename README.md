@@ -88,7 +88,10 @@ target-type dropdown.
   the live DNS check, `--no-harvester` to skip theHarvester, or
   `--no-spiderfoot` to skip SpiderFoot.
 - `person-check` — mail security posture for the email's domain
-  (MX/SPF/DMARC) plus a Gravatar existence check for the address.
+  (MX/SPF/DMARC), a Gravatar existence check for the address, and (if
+  a key is available) a HaveIBeenPwned breach-hit check. Pass
+  `--no-hibp` to skip it — see "Optional: HaveIBeenPwned (HIBP) breach
+  checking" below.
 - `infra-check` — resolves the target, reverse-DNS on each IP, a
   bounded common-port scan, the live TLS certificate's expiry, and (if
   keys are available) Shodan and/or Censys host-lookup enrichment with
@@ -137,6 +140,10 @@ resolution tests are the one exception — they hit real DNS, resolving
 - Gravatar existence check for the address itself (a long-standing,
   well-known OSINT technique — no auth required, and only ever a
   positive signal, never a breach)
+- (Optional) HaveIBeenPwned breach-hit check for the address, if you
+  provide a HIBP API key — flags any breach hit as high-interest, and
+  a breach that exposed passwords as the highest interest of all. See
+  "Optional: HaveIBeenPwned (HIBP) breach checking" below.
 
 **infra-check**
 - Resolves the target and reverse-DNS's every IP
@@ -238,9 +245,34 @@ Platform API this backend uses. Still not run against a live Censys
 account end-to-end, though — the exact host-lookup response shape is
 handled defensively rather than confirmed live.
 
+## Optional: HaveIBeenPwned (HIBP) breach checking
+
+`person-check` also checks the address against
+[HaveIBeenPwned](https://haveibeenpwned.com/)'s breach database if you
+provide an HIBP API key — HIBP's by-email breach lookup hasn't been
+free/keyless since 2019, so this needs a paid key same as Shodan and
+Censys need theirs. A breach hit is flagged as high-interest, and one
+that exposed passwords is scored the highest interest of any finding
+this check can produce.
+
+Resolution order: a `HIBP_API_KEY` environment variable, then a key
+already stored at `~/.config/backhoe/keys.json`, then an interactive
+prompt on first run (hidden input) — leave it blank to skip. Skip HIBP
+entirely with `--no-hibp`. A missing key skips the check silently; an
+API error (rate limit, bad key, etc.) prints a yellow warning and
+`person-check` continues with whatever it already has.
+
+**Verification note:** not run against a live HIBP account in this
+environment, same caveat as Shodan and Censys above. There's also a
+real structural difference from those two: HIBP has no free
+key-validation endpoint at all, so unlike Shodan/Censys — which can
+confirm a key works with a live check before it's stored — this
+backend validates a key by format only (a 32-character hex string).
+An actually-wrong key won't surface until the first time you run a
+real check against it.
+
 ## What's coming next
 
-- HaveIBeenPwned backend for breach hits (needs an API key)
 - WHOIS-based domain age lookup
 - A standalone setup wizard that tests each configured API key live
   and reports which backends are actually usable before a scan runs
