@@ -16,7 +16,7 @@ together, no reading the source to figure out what the flags do.
 ## See it work — 30 seconds, no signup, no API key
 
 ```bash
-pip install backhoe-osint
+pipx install backhoe-osint
 backhoe person-check admin@yellowhammertrader.com
 ```
 
@@ -59,17 +59,36 @@ carry that restriction.
 ## Install
 
 ```bash
+pipx install backhoe-osint
+```
+
+`pipx` is the recommended way to install a command-line tool like this one:
+it gives BACKHOE its own isolated environment but puts `backhoe` on your
+`PATH` globally, and it works out of the box on the "externally managed"
+Python that ships with current Debian/Ubuntu/Fedora/Linux Mint — a plain
+`pip install backhoe-osint` on those systems fails outright with an
+`externally-managed-environment` error (PEP 668) instead of installing
+anything.
+
+If you'd rather use plain `pip`, do it inside a virtual environment:
+```bash
+python3 -m venv venv
+source venv/bin/activate
 pip install backhoe-osint
 ```
+(or add `--break-system-packages` to the original command if you
+understand the risk of installing outside a venv on a system Python).
 
 Or from source:
 ```bash
 git clone https://github.com/sloppytopp/BACKHOE.git
 cd BACKHOE
-python3 -m venv venv
-source venv/bin/activate
-pip install -e .
+pipx install --editable .
 ```
+(`--editable` wires the installed `backhoe` command straight back to this
+checkout, so local changes take effect immediately with no reinstall — or
+use the manual venv route above with `pip install -e .` instead of
+`pip install backhoe-osint`.)
 
 ## Use
 
