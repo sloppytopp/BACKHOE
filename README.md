@@ -90,6 +90,37 @@ checkout, so local changes take effect immediately with no reinstall — or
 use the manual venv route above with `pip install -e .` instead of
 `pip install backhoe-osint`.)
 
+### Termux (Android)
+
+BACKHOE has no compiled dependencies — `click`, `rich`, `requests`, and
+`dnspython` are all pure Python — so it runs on [Termux](https://termux.dev/)
+the same way it runs on any other Linux Python. Termux carries the same
+PEP 668 `externally-managed-environment` guard as current Debian/Ubuntu, so
+a bare `pip install backhoe-osint` is likely to fail the same way it does
+on Linux Mint above. `pkg` has no `pipx` package, so install it via `pip
+--user` first:
+
+```bash
+pkg update && pkg install python
+pip install --user pipx
+~/.local/bin/pipx ensurepath
+# restart Termux (or open a new session) so pipx is on PATH, then:
+pipx install backhoe-osint
+```
+
+`domain-audit`, `person-check`, and `infra-check` all work unchanged —
+DNS/HTTP lookups, the bounded port scan, and the Shodan/Censys/HIBP key
+wizard are all plain sockets/HTTPS with nothing Android-specific.
+theHarvester and SpiderFoot are separate installs on any platform (see
+below), not something this section changes.
+
+**Not verified on a real Termux install in this environment** — no
+Android device or emulator was available during development. The steps
+above follow Termux's own current package behavior and the same PEP 668
+pattern already confirmed on Linux Mint, but haven't been run end-to-end
+on-device. Worth a real smoke test the first time this runs on actual
+Termux.
+
 ## Use
 
 ```bash
