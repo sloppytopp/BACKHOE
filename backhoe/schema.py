@@ -1,7 +1,7 @@
 """
 BACKHOE normalized finding schema.
 
-Every backend (crt.sh, theHarvester, SpiderFoot, Shodan, etc.) outputs
+Every backend (crt.sh, theHarvester, Shodan, etc.) outputs
 its own format. BACKHOE's whole job is translating all of that into
 ONE shape so findings can be scored, deduped, and rendered consistently
 no matter which tool produced them.

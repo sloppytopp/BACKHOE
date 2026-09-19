@@ -50,8 +50,6 @@ backhoe/
     netcheck.py            interception canary — see below, read this one
     theharvester.py        shells out to a separately-installed theHarvester
                         CLI (not a pip dependency — see "theHarvester" below)
-    spiderfoot.py           shells out to a separately-installed SpiderFoot
-                        checkout (not a pip dependency — see "SpiderFoot" below)
     shodan.py               Shodan host-lookup enrichment for infra-check,
                         needs an API key via keys.py — see "Shodan" below
     censys.py               Censys host-lookup enrichment for infra-check,
@@ -95,8 +93,8 @@ don't need it.
 ## What's shipped (v0.6)
 
 - `domain-audit <domain>` — crt.sh subdomain enum, optional theHarvester
-  and SpiderFoot enrichment (see below), keyword + cert-recency interest
-  scoring, live DNS liveness check (`--no-resolve` to skip)
+  enrichment (see below), keyword + cert-recency interest scoring, live
+  DNS liveness check (`--no-resolve` to skip)
 - `person-check <email>` — MX/SPF/DMARC for the domain, Gravatar check
   for the address, plus optional HaveIBeenPwned breach-hit checking (see
   below). Verified live against yellowhammertrader.com during
@@ -107,7 +105,7 @@ don't need it.
   TLS cert expiry, with the interception guard above, plus optional
   Shodan and/or Censys host-lookup enrichment (see below)
 
-195 tests, all passing, `pytest` from repo root (`pip install -e ".[dev]"`
+183 tests, all passing, `pytest` from repo root (`pip install -e ".[dev]"`
 first).
 
 ## Three gap fixes (2026-09-11), applied via TDD after independent verification
@@ -197,55 +195,41 @@ during development, not assumed from memory) before writing the parser:
   smoke test the first time this runs somewhere with theHarvester
   actually installed.
 
-## SpiderFoot (v0.4) — subprocess, not a dependency, actually run live
+## SpiderFoot — removed (2026-09-19), do not re-add without reading this
 
-`backends/spiderfoot.py` shells out to a separately-installed SpiderFoot
-checkout (github.com/smicallef/spiderfoot) for `domain-audit`. Unlike
-theHarvester, this one wasn't Python-version-blocked — its
-`requirements.txt` has no upper bound — so it was cloned, its
-dependencies actually installed, and a real scan run live against
-`example.com` end to end during development. Stronger verification than
-theHarvester got, and it changed the design in a way source-reading alone
-hadn't caught:
+SpiderFoot enrichment (`backends/spiderfoot.py`, `--spiderfoot/--no-spiderfoot`)
+was shipped in v0.4 and removed at the owner's request. It's recoverable
+from git history if ever wanted back. `--no-spiderfoot` is now an unknown
+option, so any script passing it will fail. What a live run against
+yellowhammertrader.com showed just before removal (a manual `sf.py` run
+with the same arguments the backend used, capped at 20 minutes):
 
-- **SpiderFoot ships no console-script entry point at all** — no
-  `pip install`-able command, unlike theHarvester. It's meant to be
-  cloned and run as `python3 sf.py ...`. So instead of `shutil.which`,
-  `_find_sf_py()` looks for a `SPIDERFOOT_HOME` env var pointing at the
-  checkout, falling back to `shutil.which("sf.py")` only if an operator
-  has manually put it on PATH.
-- `sf.py -s <target> -t <types> -o json -q` genuinely is a one-shot scan
-  (confirmed live) — a built-in `sfp__stor_stdout` module streams a JSON
-  array straight to stdout, no server to run first.
-- **The live run is what caught the real gotcha**: the JSON stream is
-  *not* filtered down to the requested `-t` types — SpiderFoot pulls in
-  every module in the dependency chain, so a real scan against
-  `example.com` emitted dozens of event types (HTTP headers, raw DNS
-  records, PGP keys, Stack Overflow usernames...) far beyond
-  `INTERNET_NAME`/`EMAILADDR`. Every event is filtered here by its exact
-  `type` string, not the requested types.
-- **The gotcha inside the gotcha**: `"Internet Name"` (a real subdomain)
-  is a *different* type string than `"Affiliate - Internet Name"` — in
-  the live run, Cloudflare's own nameservers (the target's DNS provider,
-  not the target) came back labeled `"Affiliate - Internet Name"` while
-  `www.example.com` came back as plain `"Internet Name"`. A substring
-  match instead of an exact match would have misattributed a third
-  party's infrastructure to the target. Same exact-match discipline
-  applies to `"Email Address"`.
-- `DEFAULT_TYPES = "INTERNET_NAME,EMAILADDR"` passed to `-t` lets
-  SpiderFoot auto-select whichever of its own modules can produce those
-  types — no manual per-source curation needed like theHarvester's
-  `DEFAULT_SOURCES` list.
-- SpiderFoot writes persistent scan history to
-  `~/.spiderfoot/spiderfoot.db` by default (confirmed in source) —
-  overridden via the `SPIDERFOOT_DATA` env var, pointed at a per-call
-  tempdir, so nothing accumulates on the host.
-- Not found → `SpiderFootNotInstalled` (a `SpiderFootError`), caught
-  non-fatally in `cli.py` — same tier as theHarvester and Gravatar.
-  `--no-spiderfoot` skips it outright.
-- Only `"Internet Name"`→SUBDOMAIN and `"Email Address"`→EMAIL are
-  mapped, for the same reason theHarvester's `ips` is skipped: IP
-  addresses belong to infra-check's PTR-lookup-backed handling, not here.
+- **It never finished.** SpiderFoot's `-t INTERNET_NAME,EMAILADDR` pulls in
+  the site-crawling module, so on a large phpBB forum it emitted ~2,000
+  internal-link events in 10 minutes and was still going at the cap. The
+  backend's hardcoded 180s timeout (`DEFAULT_TIMEOUT`, no CLI override) could
+  never have been enough for a real site.
+- **The stdout JSON stream was not reliably parseable**: ~30 of ~4,140 lines
+  failed to parse (cause not determined — interleaved writes or truncation).
+  The backend called `json.loads` on all of stdout, so a scan that did
+  finish could still be discarded as "unparseable JSON".
+- **Value over crt.sh was one row**: `www.yellowhammertrader.com`, found by
+  `sfp_dnsbrute`. No emails belonging to the target.
+- SpiderFoot 4.0's `requirements.txt` pins `pyyaml>=5.4.1,<6`; PyYAML 5.4.1
+  has no Python 3.12 wheel and fails to build from source (`'build_ext'
+  object has no attribute 'cython_sources'`). Installing with `pyyaml>=6.0.1`
+  works — SpiderFoot only calls `yaml.safe_load`.
+
+If it's ever re-added, the design lessons that still hold: it has no
+console-script entry point (find `sf.py` via a `SPIDERFOOT_HOME` env var);
+its deps must be installed into the same interpreter BACKHOE runs under
+(`sys.executable`, i.e. the pipx venv — not some other venv); set
+`SPIDERFOOT_DATA` to a tempdir so scan history doesn't pile up in
+`~/.spiderfoot`; filter events by **exact** `type` string (`"Internet Name"`
+is the target's; `"Affiliate - Internet Name"` is a third party's, e.g. the
+target's DNS provider); and consider restricting modules with `-m`
+instead of relying on `-t` so it doesn't crawl the target (untested — an
+inference from the crawl behavior above, not something that was tried).
 
 ## Shodan (v0.4) — API-key wizard + host-lookup backend for infra-check
 
@@ -254,7 +238,7 @@ hadn't caught:
 gravatar.py) to enrich `infra-check`'s open-port findings with
 service/product/version data and known CVEs — richer than what BACKHOE's
 own bounded TCP connect scan (`portscan.py`) can see on its own. Unlike
-theHarvester/SpiderFoot, Shodan needs an API key, which is where
+theHarvester, Shodan needs an API key, which is where
 `keys.py` comes in:
 
 - **`keys.py` is a generic, provider-agnostic key wizard**, built so
@@ -299,7 +283,7 @@ theHarvester/SpiderFoot, Shodan needs an API key, which is where
   TLS fetch have to be skipped entirely.
 - `ShodanAPIError` is caught non-fatally in `cli.py` (yellow warning,
   `infra-check` continues on whatever it already has) — same tier as
-  Gravatar, theHarvester, and SpiderFoot. If `keys.get_api_key()` returns
+  Gravatar and theHarvester. If `keys.get_api_key()` returns
   `None` (no env var, no stored key, blank prompt), Shodan enrichment is
   skipped silently — that's a normal "opted out," not a warning-worthy
   failure.
