@@ -111,8 +111,8 @@ pipx install backhoe-osint
 `domain-audit`, `person-check`, and `infra-check` all work unchanged —
 DNS/HTTP lookups, the bounded port scan, and the Shodan/Censys/HIBP key
 wizard are all plain sockets/HTTPS with nothing Android-specific.
-theHarvester and SpiderFoot are separate installs on any platform (see
-below), not something this section changes.
+theHarvester is a separate install on any platform (see below), not
+something this section changes.
 
 **Not verified on a real Termux install in this environment** — no
 Android device or emulator was available during development. The steps
@@ -133,10 +133,9 @@ One command, one target, one readable report — no module picker, no
 target-type dropdown.
 
 - `domain-audit` — subdomains from certificate transparency logs and
-  (if installed) theHarvester and SpiderFoot, live DNS check,
-  interest-scored by name and freshness. Pass `--no-resolve` to skip
-  the live DNS check, `--no-harvester` to skip theHarvester, or
-  `--no-spiderfoot` to skip SpiderFoot.
+  (if installed) theHarvester, live DNS check, interest-scored by name
+  and freshness. Pass `--no-resolve` to skip the live DNS check, or
+  `--no-harvester` to skip theHarvester.
 - `person-check` — mail security posture for the email's domain
   (MX/SPF/DMARC), a Gravatar existence check for the address, and (if
   a key is available) a HaveIBeenPwned breach-hit check. Pass
@@ -168,10 +167,9 @@ resolution tests are the one exception — they hit real DNS, resolving
 **domain-audit**
 - Pulls every subdomain seen in certificate transparency logs (crt.sh,
   no API key needed)
-- If [theHarvester](https://github.com/laramies/theHarvester) and/or
-  [SpiderFoot](https://github.com/smicallef/spiderfoot) are installed
-  separately (neither is a BACKHOE dependency — see below), also runs
-  them for additional subdomains and emails. Findings for the same
+- If [theHarvester](https://github.com/laramies/theHarvester) is
+  installed separately (it's not a BACKHOE dependency — see below), also
+  runs it for additional subdomains and emails. Findings for the same
   subdomain from multiple sources merge into one row instead of
   duplicating.
 - Flags subdomains with names like `admin`, `dev`, `staging`, `vpn`,
@@ -230,9 +228,9 @@ resolution tests are the one exception — they hit real DNS, resolving
 - Renders a plain-English summary line plus a sorted, color-coded
   table — highest interest first
 
-## Optional external tools: theHarvester and SpiderFoot
+## Optional external tool: theHarvester
 
-`domain-audit` shells out to both if it can find them; neither is ever
+`domain-audit` shells out to theHarvester if it can find it; it's never
 installed as a BACKHOE dependency.
 
 - **theHarvester** needs to be on `PATH` (current theHarvester requires
@@ -240,13 +238,9 @@ installed as a BACKHOE dependency.
   separately — e.g. `uv tool install theHarvester` or `pipx install
   theHarvester` — per [its own docs](https://github.com/laramies/theHarvester).
   Skip it with `--no-harvester`.
-- **SpiderFoot** has no installable command at all — it's a checkout you
-  run as `python3 sf.py ...`. Clone
-  [its repo](https://github.com/smicallef/spiderfoot) anywhere and set
-  `SPIDERFOOT_HOME` to that directory. Skip it with `--no-spiderfoot`.
 
-If either isn't found, `domain-audit` prints a yellow warning and
-continues without it — same non-fatal tier as the Gravatar check in
+If it isn't found, `domain-audit` prints a yellow warning and continues
+without it — same non-fatal tier as the Gravatar check in
 `person-check`.
 
 ## Optional: Shodan enrichment
